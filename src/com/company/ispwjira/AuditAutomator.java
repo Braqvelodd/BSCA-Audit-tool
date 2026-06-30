@@ -28,6 +28,10 @@ import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class AuditAutomator {
 
@@ -108,6 +112,7 @@ public class AuditAutomator {
     private final String jiraUrl;
     private final boolean devMode;
     private CloseableHttpClient httpClient;
+    private final ExecutorService executorService = Executors.newFixedThreadPool(5);
     
     // Stores the metadata header lines from the CSV (e.g. lines 1 to 37)
     public static final List<String> metadataHeaderLines = new ArrayList<>();
@@ -176,6 +181,14 @@ public class AuditAutomator {
             } catch (IOException e) {
                 AuditLogger.error("Failed to close HttpClient: " + e.getMessage());
             }
+        }
+        executorService.shutdown();
+        try {
+            if (!executorService.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                executorService.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executorService.shutdownNow();
         }
     }
 
@@ -301,7 +314,7 @@ public class AuditAutomator {
             row.test2 = "N";
         }
 
-        // TEST 3 & TEST 4: Subtask checks
+        // TEST 3 & TEST 4: Subtask checks in parallel (up to 5 threads at a time)
         try {
             JsonArray subtasks = fields.getAsJsonArray("subtasks");
             if (subtasks == null || subtasks.size() == 0) {
@@ -309,51 +322,75 @@ public class AuditAutomator {
                 row.test4 = "N";
                 AuditLogger.warn(epicKey + " TEST 3 & 4 Failed: No sub-tasks found.");
             } else {
-                boolean hasEvidence = false;
-                boolean qaPassed = false;
-                boolean qaTaskFound = false;
+                final String searchString = (row.type.trim() + " " + row.name.trim()).toLowerCase();
+                final AtomicBoolean test3Passed = new AtomicBoolean(false);
+                final AtomicBoolean qaPassed = new AtomicBoolean(false);
+                final AtomicBoolean qaTaskFound = new AtomicBoolean(false);
+
+                List<Future<?>> futures = new ArrayList<>();
 
                 for (JsonElement subEl : subtasks) {
                     JsonObject subtaskObj = subEl.getAsJsonObject();
-                    String subtaskKey = subtaskObj.get("key").getAsString();
-                    
-                    String subtaskUrl = jiraUrl + "/rest/api/2/issue/" + subtaskKey;
-                    String subtaskJson = executeHttpGetWithRetry(subtaskUrl);
-                    if (subtaskJson == null) continue;
+                    final String subtaskKey = subtaskObj.get("key").getAsString();
 
-                    JsonObject subPayload = JsonParser.parseString(subtaskJson).getAsJsonObject();
-                    JsonObject subFields = subPayload.getAsJsonObject("fields");
-                    if (subFields == null) continue;
+                    futures.add(executorService.submit(new Runnable() {
+                        @Override
+                        public void run() {
+                            // Short circuit if we already resolved both test 3 (pass) and test 4 (pass)
+                            if (test3Passed.get() && qaPassed.get()) {
+                                return;
+                            }
 
-                    String summary = subFields.get("summary") != null ? subFields.get("summary").getAsString() : "";
-                    boolean isQaTask = summary.toLowerCase().contains("qa") || summary.toLowerCase().contains("test");
+                            try {
+                                String subtaskUrl = jiraUrl + "/rest/api/2/issue/" + subtaskKey;
+                                String subtaskJson = executeHttpGetWithRetry(subtaskUrl);
+                                if (subtaskJson == null) return;
 
-                    JsonArray attachments = subFields.getAsJsonArray("attachment");
-                    int attachmentSize = (attachments != null) ? attachments.size() : 0;
+                                JsonObject subPayload = JsonParser.parseString(subtaskJson).getAsJsonObject();
+                                JsonObject subFields = subPayload.getAsJsonObject("fields");
+                                if (subFields == null) return;
 
-                    JsonObject commentObj = subFields.getAsJsonObject("comment");
-                    JsonArray comments = (commentObj != null) ? commentObj.getAsJsonArray("comments") : null;
-                    int commentCount = (comments != null) ? comments.size() : 0;
+                                String summary = subFields.get("summary") != null ? subFields.get("summary").getAsString() : "";
+                                String description = subFields.get("description") != null && !subFields.get("description").isJsonNull()
+                                        ? subFields.get("description").getAsString() : "";
 
-                    if (attachmentSize > 0 || commentCount > 0) {
-                        hasEvidence = true;
-                    }
+                                // TEST 3 check: Starts with in summary, OR contains in description
+                                boolean matchSummary = summary.toLowerCase().trim().startsWith(searchString);
+                                boolean matchDesc = description.toLowerCase().contains(searchString);
 
-                    if (isQaTask) {
-                        qaTaskFound = true;
-                        JsonObject subStatus = subFields.getAsJsonObject("status");
-                        String subStatusName = subStatus != null ? subStatus.get("name").getAsString() : "";
-                        if ("Passed".equalsIgnoreCase(subStatusName) || 
-                            "Accepted".equalsIgnoreCase(subStatusName) || 
-                            "Done".equalsIgnoreCase(subStatusName)) {
-                            qaPassed = true;
+                                if (matchSummary || matchDesc) {
+                                    test3Passed.set(true);
+                                }
+
+                                // TEST 4 check: Locate QA/testing sub-task and verify status
+                                boolean isQaTask = summary.toLowerCase().contains("qa") || summary.toLowerCase().contains("test");
+                                if (isQaTask) {
+                                    qaTaskFound.set(true);
+                                    JsonObject subStatus = subFields.getAsJsonObject("status");
+                                    String subStatusName = subStatus != null ? subStatus.get("name").getAsString() : "";
+                                    if ("Passed".equalsIgnoreCase(subStatusName) ||
+                                        "Accepted".equalsIgnoreCase(subStatusName) ||
+                                        "Done".equalsIgnoreCase(subStatusName)) {
+                                        qaPassed.set(true);
+                                    }
+                                }
+                            } catch (Exception ex) {
+                                AuditLogger.error("Failed to query subtask " + subtaskKey + ": " + ex.getMessage());
+                            }
                         }
-                    }
+                    }));
                 }
 
-                row.test3 = hasEvidence ? "Y" : "N";
-                if (qaTaskFound) {
-                    row.test4 = qaPassed ? "Y" : "N";
+                // Wait for all parallel sub-task checks to complete
+                for (Future<?> f : futures) {
+                    try {
+                        f.get();
+                    } catch (Exception ex) {}
+                }
+
+                row.test3 = test3Passed.get() ? "Y" : "N";
+                if (qaTaskFound.get()) {
+                    row.test4 = qaPassed.get() ? "Y" : "N";
                 } else {
                     row.test4 = "N";
                 }
