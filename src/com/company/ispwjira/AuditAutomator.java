@@ -12,8 +12,13 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
 import org.apache.http.conn.ssl.TrustAllStrategy;
+import org.apache.http.conn.socket.ConnectionSocketFactory;
+import org.apache.http.conn.socket.PlainConnectionSocketFactory;
+import org.apache.http.config.Registry;
+import org.apache.http.config.RegistryBuilder;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
+import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.http.ssl.PrivateKeyDetails;
 import org.apache.http.ssl.PrivateKeyStrategy;
 import org.apache.http.ssl.SSLContexts;
@@ -112,7 +117,8 @@ public class AuditAutomator {
     private final String jiraUrl;
     private final boolean devMode;
     private CloseableHttpClient httpClient;
-    private final ExecutorService executorService = Executors.newFixedThreadPool(5);
+    private final ExecutorService rowExecutorService = Executors.newFixedThreadPool(5);
+    private final ExecutorService subtaskExecutorService = Executors.newFixedThreadPool(20);
     
     // Stores the metadata header lines from the CSV (e.g. lines 1 to 37)
     public static final List<String> metadataHeaderLines = new ArrayList<>();
@@ -161,17 +167,26 @@ public class AuditAutomator {
                 NoopHostnameVerifier.INSTANCE
         );
 
+        Registry<ConnectionSocketFactory> socketFactoryRegistry = RegistryBuilder.<ConnectionSocketFactory>create()
+                .register("http", PlainConnectionSocketFactory.getSocketFactory())
+                .register("https", sslSocketFactory)
+                .build();
+
+        PoolingHttpClientConnectionManager connManager = new PoolingHttpClientConnectionManager(socketFactoryRegistry);
+        connManager.setMaxTotal(50);
+        connManager.setDefaultMaxPerRoute(50);
+
         RequestConfig requestConfig = RequestConfig.custom()
                 .setConnectTimeout(10000)
                 .setSocketTimeout(10000)
                 .build();
 
         this.httpClient = HttpClients.custom()
-                .setSSLSocketFactory(sslSocketFactory)
+                .setConnectionManager(connManager)
                 .setDefaultRequestConfig(requestConfig)
                 .build();
 
-        AuditLogger.info("Secure HTTP Client successfully initialized with CAC Certificate.");
+        AuditLogger.info("Secure HTTP Client successfully initialized with CAC Certificate & Connection Pooling.");
     }
 
     public void close() {
@@ -182,36 +197,59 @@ public class AuditAutomator {
                 AuditLogger.error("Failed to close HttpClient: " + e.getMessage());
             }
         }
-        executorService.shutdown();
+        rowExecutorService.shutdown();
+        subtaskExecutorService.shutdown();
         try {
-            if (!executorService.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
-                executorService.shutdownNow();
+            if (!rowExecutorService.awaitTermination(3, java.util.concurrent.TimeUnit.SECONDS)) {
+                rowExecutorService.shutdownNow();
+            }
+            if (!subtaskExecutorService.awaitTermination(3, java.util.concurrent.TimeUnit.SECONDS)) {
+                subtaskExecutorService.shutdownNow();
             }
         } catch (InterruptedException e) {
-            executorService.shutdownNow();
+            rowExecutorService.shutdownNow();
+            subtaskExecutorService.shutdownNow();
         }
     }
 
     public void runAudit(List<AuditRow> rows) {
         AuditLogger.info("Starting audit run on " + rows.size() + " rows.");
+        List<Future<?>> rowFutures = new ArrayList<>();
+
         for (int i = 0; i < rows.size(); i++) {
-            AuditRow row = rows.get(i);
+            final AuditRow row = rows.get(i);
+            final int index = i;
+
             // Skip rows without SELECTED=Y to avoid unnecessary API hits on unselected data
             if (!"Y".equalsIgnoreCase(row.selected)) {
                 continue;
             }
-            
-            AuditLogger.info("Auditing row " + (i + 1) + "/" + rows.size() + " - Release ID: " + row.releaseId);
-            try {
-                row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
-                if (row.test6 == null || row.test6.trim().isEmpty()) {
-                    row.test6 = "N";
+
+            rowFutures.add(rowExecutorService.submit(new Runnable() {
+                @Override
+                public void run() {
+                    AuditLogger.info("Auditing row " + (index + 1) + "/" + rows.size() + " - Release ID: " + row.releaseId);
+                    try {
+                        row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
+                        if (row.test6 == null || row.test6.trim().isEmpty()) {
+                            row.test6 = "N";
+                        }
+                        auditSingleRow(row);
+                    } catch (Exception e) {
+                        row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
+                        row.notes = "Unhandled exception: " + e.getMessage();
+                        AuditLogger.error("Error auditing row " + row.releaseId + ": " + e.getMessage());
+                    }
                 }
-                auditSingleRow(row);
+            }));
+        }
+
+        // Wait for all parallel row audits to complete
+        for (Future<?> f : rowFutures) {
+            try {
+                f.get();
             } catch (Exception e) {
-                row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
-                row.notes = "Unhandled exception: " + e.getMessage();
-                AuditLogger.error("Error auditing row " + row.releaseId + ": " + e.getMessage());
+                AuditLogger.error("Error waiting for row audit task: " + e.getMessage());
             }
         }
         AuditLogger.info("Audit run completed.");
@@ -333,7 +371,7 @@ public class AuditAutomator {
                     JsonObject subtaskObj = subEl.getAsJsonObject();
                     final String subtaskKey = subtaskObj.get("key").getAsString();
 
-                    futures.add(executorService.submit(new Runnable() {
+                    futures.add(subtaskExecutorService.submit(new Runnable() {
                         @Override
                         public void run() {
                             // Short circuit if we already resolved both test 3 (pass) and test 4 (pass)
