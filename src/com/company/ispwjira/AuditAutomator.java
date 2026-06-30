@@ -265,7 +265,7 @@ public class AuditAutomator {
             try {
                 AuditLogger.info("[TRACE] Path 1 (Task-Link): Querying JIRA sub-tasks containing summary '" + row.releaseId + "'...");
                 String subtaskJql = "project = TFS AND issuetype = Sub-task AND summary ~ \"" + row.releaseId + "\"";
-                String subtaskSearchUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(subtaskJql, "UTF-8");
+                String subtaskSearchUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(subtaskJql, "UTF-8") + "&maxResults=1000";
                 String subtaskSearchJson = executeHttpGetWithRetry(subtaskSearchUrl);
                 
                 if (subtaskSearchJson != null) {
@@ -394,7 +394,7 @@ public class AuditAutomator {
                                                     }
                                                     jqlBuilder.append(")");
                                                     
-                                                    String epicsUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(jqlBuilder.toString(), "UTF-8");
+                                                    String epicsUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(jqlBuilder.toString(), "UTF-8") + "&maxResults=1000";
                                                     String epicsJson = executeHttpGetWithRetry(epicsUrl);
                                                     if (epicsJson != null) {
                                                         JsonObject epicsResponse = JsonParser.parseString(epicsJson).getAsJsonObject();
@@ -432,7 +432,7 @@ public class AuditAutomator {
         // 2. Direct Comment Path (Fallback Path)
         AuditLogger.info("[TRACE] Path 2: Querying JIRA comments for Release ID '" + row.releaseId + "'...");
         String fallbackJql = "project = TFS AND comment ~ \"" + row.releaseId + "\"";
-        String fallbackUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(fallbackJql, "UTF-8");
+        String fallbackUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(fallbackJql, "UTF-8") + "&maxResults=1000";
 
         String fallbackJson = executeHttpGetWithRetry(fallbackUrl);
         if (fallbackJson == null) {
@@ -492,7 +492,7 @@ public class AuditAutomator {
                 try {
                     String storyJql = "\"epic link\" = " + candidateKey + " OR parent = " + candidateKey;
                     AuditLogger.info("[TRACE] Epic " + candidateKey + ": Querying child stories via: " + storyJql);
-                    String storyUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(storyJql, "UTF-8");
+                    String storyUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(storyJql, "UTF-8") + "&maxResults=1000";
                     String storyResultJson = executeHttpGetWithRetry(storyUrl);
                     if (storyResultJson != null) {
                         JsonObject storyResponse = JsonParser.parseString(storyResultJson).getAsJsonObject();
@@ -505,6 +505,13 @@ public class AuditAutomator {
                                 String storyKey = story.get("key").getAsString();
                                 JsonObject storyFields = story.getAsJsonObject("fields");
                                 if (storyFields != null) {
+                                    JsonObject issueTypeObj = storyFields.getAsJsonObject("issuetype");
+                                    String typeName = issueTypeObj != null ? issueTypeObj.get("name").getAsString() : "";
+                                    if ("Test".equalsIgnoreCase(typeName) || "Test Execution".equalsIgnoreCase(typeName)) {
+                                        AuditLogger.info("[TRACE] Ignoring child issue " + storyKey + " because its type is: " + typeName);
+                                        continue;
+                                    }
+
                                     JsonArray storySubtasks = storyFields.getAsJsonArray("subtasks");
                                     int storySubCount = (storySubtasks != null) ? storySubtasks.size() : 0;
                                     AuditLogger.info("[TRACE] Child Story " + storyKey + " has " + storySubCount + " sub-tasks.");
