@@ -14,16 +14,20 @@ import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
 import org.apache.http.conn.ssl.TrustAllStrategy;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
+import org.apache.http.ssl.PrivateKeyDetails;
+import org.apache.http.ssl.PrivateKeyStrategy;
 import org.apache.http.ssl.SSLContexts;
 import org.apache.http.util.EntityUtils;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import java.io.*;
+import java.net.Socket;
 import java.net.URLEncoder;
 import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public class AuditAutomator {
 
@@ -124,25 +128,31 @@ public class AuditAutomator {
         SSLContext sslContext;
         SSLConnectionSocketFactory sslSocketFactory;
 
-        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        if (certAlias != null && !certAlias.isEmpty()) {
-            AuditLogger.info("Loading certificate with alias: " + certAlias);
-            KeyStore keyStore = CertificateManager.getWindowsKeyStore();
-            kmf.init(keyStore, null);
-        } else {
-            AuditLogger.fatal("FATAL: Valid DoD PKI certificate not found/selected in keystore.");
-            throw new IllegalStateException("Valid DoD PKI certificate not found in keystore.");
+        if (certAlias == null || certAlias.isEmpty()) {
+            AuditLogger.fatal("FATAL: Valid DoD PKI certificate not selected.");
+            throw new IllegalStateException("Valid DoD PKI certificate not selected.");
         }
 
+        AuditLogger.info("Configuring SSLContext with certificate alias: " + certAlias);
+        KeyStore keyStore = CertificateManager.getWindowsKeyStore();
+
         sslContext = SSLContexts.custom()
-                .loadKeyMaterial(CertificateManager.getWindowsKeyStore(), null)
+                .loadKeyMaterial(keyStore, null, new PrivateKeyStrategy() {
+                    @Override
+                    public String chooseAlias(Map<String, PrivateKeyDetails> aliases, Socket socket) {
+                        if (aliases.containsKey(certAlias)) {
+                            AuditLogger.info("Successfully bound client cert alias: " + certAlias);
+                            return certAlias;
+                        }
+                        AuditLogger.warn("Certificate alias not found in active socket list: " + certAlias);
+                        return null;
+                    }
+                })
                 .loadTrustMaterial(new TrustAllStrategy())
                 .build();
 
         sslSocketFactory = new SSLConnectionSocketFactory(
                 sslContext,
-                new String[]{"TLSv1.2"},
-                null,
                 NoopHostnameVerifier.INSTANCE
         );
 

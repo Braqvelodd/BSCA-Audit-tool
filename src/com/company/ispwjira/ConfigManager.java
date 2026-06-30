@@ -7,7 +7,8 @@ import java.io.IOException;
 import java.util.Properties;
 
 public class ConfigManager {
-    private static final String CONFIG_FILE = "config.ini";
+    private static final String CONFIG_DIR = System.getProperty("user.home") + File.separator + ".BSCA-audit";
+    private static final String CONFIG_FILE = CONFIG_DIR + File.separator + "config.ini";
     private static final Properties properties = new Properties();
 
     static {
@@ -19,21 +20,29 @@ public class ConfigManager {
     }
 
     public static synchronized void load() {
+        File dir = new File(CONFIG_DIR);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
         File file = new File(CONFIG_FILE);
         if (file.exists()) {
             try (FileInputStream fis = new FileInputStream(file)) {
                 properties.load(fis);
-                AuditLogger.info("Configuration loaded from " + CONFIG_FILE);
+                AuditLogger.info("Configuration loaded from " + file.getAbsolutePath());
             } catch (IOException e) {
                 AuditLogger.error("Failed to load configuration: " + e.getMessage());
             }
         } else {
-            AuditLogger.warn(CONFIG_FILE + " not found, using default settings.");
+            AuditLogger.warn("Configuration file not found, using default settings.");
             save(); // Create the file with default settings
         }
     }
 
     public static synchronized void save() {
+        File dir = new File(CONFIG_DIR);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
         try (FileOutputStream fos = new FileOutputStream(CONFIG_FILE)) {
             properties.store(fos, "ISPW-Jira Audit Automator Configuration");
             AuditLogger.info("Configuration saved to " + CONFIG_FILE);
