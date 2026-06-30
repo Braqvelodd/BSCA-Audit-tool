@@ -3,3 +3,5 @@ bin/
 dist/
 *.log
 config.ini
+compileandbuild.bat
+build.bat
