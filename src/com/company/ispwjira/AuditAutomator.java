@@ -760,11 +760,11 @@ public class AuditAutomator {
                         row.test5 = "N";
                     }
 
+                    String epicSum = getEpicSummary(candidate, candTypeName);
                     if (!matchedViaSummary.get() && matchedViaDesc.get()) {
-                        String epicSum = getEpicSummary(candidate, candTypeName);
-                        row.notes = "not found as a sub-task. Epic Summary: " + epicSum;
+                        row.notes = "not found as a sub-task, " + epicSum;
                     } else {
-                        row.notes = "Audit successful.";
+                        row.notes = "Audit successful, " + epicSum;
                     }
                     return true;
                 }
