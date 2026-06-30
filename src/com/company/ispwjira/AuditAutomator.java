@@ -212,7 +212,7 @@ public class AuditAutomator {
         }
 
         // 1. Resolve JQL Search
-        String jqlQuery = "project = TFS AND comment ~ \"" + row.releaseId + "\"";
+        String jqlQuery = "project = TFS AND comment ~ \"" + row.releaseId + "\" AND issuetype != 'Sub-task'";
         String searchUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(jqlQuery, "UTF-8");
 
         String searchResultJson = executeHttpGetWithRetry(searchUrl);
@@ -267,7 +267,11 @@ public class AuditAutomator {
         try {
             JsonObject issueType = fields.getAsJsonObject("issuetype");
             String typeName = issueType != null ? issueType.get("name").getAsString() : "";
-            row.workType = typeName;
+            if ("Epic".equalsIgnoreCase(typeName)) {
+                row.workType = "SCR";
+            } else {
+                row.workType = typeName;
+            }
             if ("Epic".equalsIgnoreCase(typeName) || "Story".equalsIgnoreCase(typeName)) {
                 row.test1 = "Y";
             } else {
