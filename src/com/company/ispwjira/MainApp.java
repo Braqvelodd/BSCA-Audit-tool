@@ -228,36 +228,40 @@ public class MainApp extends Application {
         header.getChildren().addAll(title, subtitle);
         root.setTop(header);
 
-        // Main Content Area
-        VBox mainContent = new VBox(15);
-        mainContent.setPadding(new Insets(15));
-
+        // Top Section: Config Card + Table Card
         TitledPane configCard = createConfigCard();
         VBox tableCard = createTableCard();
+        VBox topSection = new VBox(10, configCard, tableCard);
+        VBox.setVgrow(tableCard, Priority.ALWAYS);
+        topSection.setPadding(new Insets(10));
 
-        mainContent.getChildren().addAll(configCard, tableCard);
-        root.setCenter(mainContent);
+        // Bottom Section: Execution Console Logs + Progress Bar
+        VBox bottomSection = new VBox(5);
+        bottomSection.setPadding(new Insets(10));
 
-        // Footer Logging area
-        VBox footer = new VBox(5);
-        footer.setPadding(new Insets(0, 15, 15, 15));
-        
         Label logLabel = new Label("Execution Console Logs:");
         logLabel.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
         logLabel.setTextFill(Color.web("#334155"));
 
         logArea = new TextArea();
         logArea.setEditable(false);
-        logArea.setPrefHeight(120);
         logArea.setFont(Font.font("Consolas", 11));
         logArea.setStyle("-fx-control-inner-background: #0f172a; -fx-text-fill: #38bdf8;");
+        VBox.setVgrow(logArea, Priority.ALWAYS);
 
         progressBar = new ProgressBar(0);
         progressBar.setMaxWidth(Double.MAX_VALUE);
         progressBar.setVisible(false);
 
-        footer.getChildren().addAll(logLabel, logArea, progressBar);
-        root.setBottom(footer);
+        bottomSection.getChildren().addAll(logLabel, logArea, progressBar);
+
+        // Vertical SplitPane to allow user-adjustable scaling of table and logs
+        SplitPane splitPane = new SplitPane();
+        splitPane.setOrientation(javafx.geometry.Orientation.VERTICAL);
+        splitPane.getItems().addAll(topSection, bottomSection);
+        splitPane.setDividerPositions(0.70f); // 70% table, 30% logs
+
+        root.setCenter(splitPane);
 
         loadConfigValues();
 
@@ -370,7 +374,7 @@ public class MainApp extends Application {
         tableView = new TableView<>();
         tableView.setEditable(true);
         tableView.setItems(tableItems);
-        tableView.setPrefHeight(280);
+        VBox.setVgrow(tableView, Priority.ALWAYS);
 
         // Define columns matching 19 columns in CSV
         TableColumn<ObservableAuditRow, String> colSelected = new TableColumn<>("Selected");
