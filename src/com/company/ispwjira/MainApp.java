@@ -207,11 +207,9 @@ public class MainApp extends Application {
     public void start(Stage primaryStage) {
         primaryStage.setTitle("ISPW-Jira Compliance Audit Automator");
 
-        // Set up Logger Listener
-        AuditLogger.setLogListener(entry -> Platform.runLater(() -> {
-            logArea.appendText(entry + "\n");
-            logArea.setScrollTop(Double.MAX_VALUE);
-        }));
+        // Thread-safe buffer for logs
+        final java.util.Queue<String> logQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
+        AuditLogger.setLogListener(entry -> logQueue.add(entry));
 
         BorderPane root = new BorderPane();
         root.setStyle("-fx-background-color: #f1f5f9;");
@@ -248,6 +246,31 @@ public class MainApp extends Application {
         logArea.setFont(Font.font("Consolas", 11));
         logArea.setStyle("-fx-control-inner-background: #0f172a; -fx-text-fill: #38bdf8;");
         VBox.setVgrow(logArea, Priority.ALWAYS);
+
+        // Periodic log consumer in JavaFX thread (updates UI every 150ms)
+        javafx.animation.Timeline logUpdater = new javafx.animation.Timeline(
+            new javafx.animation.KeyFrame(javafx.util.Duration.millis(150), event -> {
+                if (!logQueue.isEmpty()) {
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = logQueue.poll()) != null) {
+                        sb.append(line).append("\n");
+                    }
+                    logArea.appendText(sb.toString());
+                    
+                    int maxChars = 200000;
+                    if (logArea.getLength() > maxChars) {
+                        String currentText = logArea.getText();
+                        logArea.setText("[... truncated oldest log history to maintain UI performance ...]\n" 
+                                + currentText.substring(currentText.length() - 100000));
+                    }
+                    
+                    logArea.setScrollTop(Double.MAX_VALUE);
+                }
+            })
+        );
+        logUpdater.setCycleCount(javafx.animation.Animation.INDEFINITE);
+        logUpdater.play();
 
         progressBar = new ProgressBar(0);
         progressBar.setMaxWidth(Double.MAX_VALUE);
@@ -632,16 +655,22 @@ public class MainApp extends Application {
         };
 
         auditTask.setOnSucceeded(e -> {
-            List<AuditAutomator.AuditRow> resultRows = auditTask.getValue();
-            tableItems.clear();
-            for (AuditAutomator.AuditRow r : resultRows) {
-                tableItems.add(new ObservableAuditRow(r));
+            try {
+                List<AuditAutomator.AuditRow> resultRows = auditTask.getValue();
+                List<ObservableAuditRow> temp = new ArrayList<>();
+                for (AuditAutomator.AuditRow r : resultRows) {
+                    temp.add(new ObservableAuditRow(r));
+                }
+                tableItems.setAll(temp);
+                
+                runButton.setDisable(false);
+                exportButton.setDisable(false);
+                progressBar.setVisible(false);
+                AuditLogger.info("Audit verification process finished. Results populated in grid.");
+            } catch (Exception ex) {
+                AuditLogger.error("Failed to populate UI table: " + ex.getMessage());
+                ex.printStackTrace();
             }
-            
-            runButton.setDisable(false);
-            exportButton.setDisable(false);
-            progressBar.setVisible(false);
-            AuditLogger.info("Audit verification process finished. Results populated in grid.");
         });
 
         auditTask.setOnFailed(e -> {
