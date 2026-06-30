@@ -810,7 +810,7 @@ public class AuditAutomator {
             String joinedEpics = epicsNotesBuilder.toString();
 
             if (!overallMatchedViaSummary && overallMatchedViaDesc) {
-                row.notes = "not found as a sub-task, " + joinedEpics;
+                row.notes = joinedEpics + ", not found as a sub-task";
             } else {
                 row.notes = joinedEpics;
             }
