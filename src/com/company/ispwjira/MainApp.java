@@ -189,6 +189,7 @@ public class MainApp extends Application {
 
     private TextField jiraUrlField;
     private ComboBox<CertificateManager.CertInfo> certComboBox;
+    private CheckBox traceLoggingCheckbox;
     private TextField inputPathField;
     private TextArea logArea;
     private Button runButton;
@@ -324,6 +325,13 @@ public class MainApp extends Application {
         grid.add(jiraUrlLabel, 0, 0);
         grid.add(jiraUrlField, 1, 0);
 
+        traceLoggingCheckbox = new CheckBox("Enable Detailed JIRA Trace Logging");
+        traceLoggingCheckbox.setFont(Font.font("Segoe UI", 12));
+        grid.add(traceLoggingCheckbox, 2, 0);
+        traceLoggingCheckbox.selectedProperty().addListener((obs, oldVal, newVal) -> {
+            ConfigManager.setTraceLoggingEnabled(newVal);
+            ConfigManager.save();
+        });
 
         // Row 1: CAC Certificate
         Label certLabel = new Label("CAC Cert Select:");
@@ -515,6 +523,7 @@ public class MainApp extends Application {
 
     private void loadConfigValues() {
         jiraUrlField.setText(ConfigManager.getJiraUrl());
+        traceLoggingCheckbox.setSelected(ConfigManager.isTraceLoggingEnabled());
         refreshCertificateList();
 
         String lastCert = ConfigManager.getLastSelectedCert();
@@ -572,6 +581,7 @@ public class MainApp extends Application {
     private void handleRunAudit() {
         String jiraUrl = jiraUrlField.getText().trim();
         CertificateManager.CertInfo selectedCert = certComboBox.getValue();
+        boolean traceLogging = traceLoggingCheckbox.isSelected();
 
         if (jiraUrl.isEmpty()) {
             showAlert("Configuration Error", "Please provide a valid Jira Server URL.");
@@ -591,6 +601,7 @@ public class MainApp extends Application {
         }
 
         ConfigManager.setJiraUrl(jiraUrl);
+        ConfigManager.setTraceLoggingEnabled(traceLogging);
         if (selectedCert != null) {
             ConfigManager.setLastSelectedCert(selectedCert.getAlias());
         }
@@ -609,7 +620,7 @@ public class MainApp extends Application {
                 AuditLogger.info("Parsing 19-column input ISPW CSV...");
                 List<AuditAutomator.AuditRow> rows = AuditAutomator.parseCsvReport(selectedInputFile);
                 
-                AuditAutomator automator = new AuditAutomator(alias, jiraUrl);
+                AuditAutomator automator = new AuditAutomator(alias, jiraUrl, traceLogging);
                 try {
                     automator.initHttpClient();
                     automator.runAudit(rows);

@@ -12,8 +12,8 @@ public class ConfigManager {
     private static final Properties properties = new Properties();
 
     static {
-        // Set defaults
         properties.setProperty("jira.url", "https://jira.example.com");
+        properties.setProperty("jira.trace_logging", "false");
         properties.setProperty("user.last_selected_cert", "");
         load();
     }
@@ -56,6 +56,14 @@ public class ConfigManager {
  
     public static void setJiraUrl(String url) {
         properties.setProperty("jira.url", url);
+    }
+
+    public static boolean isTraceLoggingEnabled() {
+        return Boolean.parseBoolean(properties.getProperty("jira.trace_logging", "false"));
+    }
+
+    public static void setTraceLoggingEnabled(boolean enabled) {
+        properties.setProperty("jira.trace_logging", String.valueOf(enabled));
     }
 
     public static String getLastSelectedCert() {

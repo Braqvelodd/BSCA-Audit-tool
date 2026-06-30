@@ -64,6 +64,11 @@ public class AuditAutomator {
         public String test6 = ""; // 100% manual check
         public String notes = "";
 
+        public final List<String> traceLogs = new java.util.concurrent.CopyOnWriteArrayList<>();
+        public void addTrace(String msg) {
+            traceLogs.add(msg);
+        }
+
         public AuditRow() {}
 
         public AuditRow(String selected, String appl, String type, String name, String ver, String action, String releaseId, String date, String time, String path) {
@@ -115,6 +120,7 @@ public class AuditAutomator {
 
     private final String certAlias;
     private final String jiraUrl;
+    private final boolean traceLoggingEnabled;
     private CloseableHttpClient httpClient;
     private final ExecutorService rowExecutorService = Executors.newFixedThreadPool(5);
     private final ExecutorService subtaskExecutorService = Executors.newFixedThreadPool(20);
@@ -122,9 +128,10 @@ public class AuditAutomator {
     // Stores the metadata header lines from the CSV (e.g. lines 1 to 37)
     public static final List<String> metadataHeaderLines = new ArrayList<>();
 
-    public AuditAutomator(String certAlias, String jiraUrl) {
+    public AuditAutomator(String certAlias, String jiraUrl, boolean traceLoggingEnabled) {
         this.certAlias = certAlias;
         this.jiraUrl = jiraUrl;
+        this.traceLoggingEnabled = traceLoggingEnabled;
     }
 
     public void initHttpClient() throws Exception {
@@ -232,6 +239,17 @@ public class AuditAutomator {
                         row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
                         row.notes = "Unhandled exception: " + e.getMessage();
                         AuditLogger.error("Error auditing row " + row.releaseId + ": " + e.getMessage());
+                    } finally {
+                        if (traceLoggingEnabled) {
+                            synchronized (AuditLogger.class) {
+                                AuditLogger.info("\n--------------------------------------------------");
+                                AuditLogger.info("TRACE LOGS FOR ROW " + (index + 1) + " (Release ID: " + row.releaseId + ", CI: " + row.type + " " + row.name + "):");
+                                for (String log : row.traceLogs) {
+                                    AuditLogger.info(log);
+                                }
+                                AuditLogger.info("--------------------------------------------------\n");
+                            }
+                        }
                     }
                 }
             }));
@@ -248,14 +266,14 @@ public class AuditAutomator {
         AuditLogger.info("Audit run completed.");
     }
 
-    private void auditSingleRow(AuditRow row) throws Exception {
+    private void auditSingleRow(final AuditRow row) throws Exception {
         if (row.releaseId == null || row.releaseId.isEmpty()) {
             row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
             row.notes = "Missing Release ID in CSV row.";
             return;
         }
 
-        AuditLogger.info("[TRACE] Auditing Release ID '" + row.releaseId + "', CI Type: '" + row.type + "', CI Name: '" + row.name + "'");
+        row.addTrace("[TRACE] Auditing Release ID '" + row.releaseId + "', CI Type: '" + row.type + "', CI Name: '" + row.name + "'");
 
         boolean isSrRelease = row.releaseId.trim().toUpperCase().startsWith("SR");
         boolean taskLinkSuccess = false;
@@ -263,7 +281,7 @@ public class AuditAutomator {
         if (isSrRelease) {
             // 1. Task-Link Path (Primary Path)
             try {
-                AuditLogger.info("[TRACE] Path 1 (Task-Link): Querying JIRA sub-tasks containing summary '" + row.releaseId + "'...");
+                row.addTrace("[TRACE] Path 1 (Task-Link): Querying JIRA sub-tasks containing summary '" + row.releaseId + "'...");
                 String subtaskJql = "project = TFS AND issuetype = Sub-task AND summary ~ \"" + row.releaseId + "\"";
                 String subtaskSearchUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(subtaskJql, "UTF-8") + "&maxResults=1000";
                 String subtaskSearchJson = executeHttpGetWithRetry(subtaskSearchUrl);
@@ -272,17 +290,17 @@ public class AuditAutomator {
                     JsonObject subtaskSearchResponse = JsonParser.parseString(subtaskSearchJson).getAsJsonObject();
                     JsonArray subtasksFound = subtaskSearchResponse.getAsJsonArray("issues");
                     int subtaskCount = subtaskSearchResponse.get("total").getAsInt();
-                    AuditLogger.info("[TRACE] Path 1: Found " + subtaskCount + " sub-tasks with summary matching '" + row.releaseId + "'");
+                    row.addTrace("[TRACE] Path 1: Found " + subtaskCount + " sub-tasks with summary matching '" + row.releaseId + "'");
                     
                     if (subtasksFound != null && subtasksFound.size() > 0) {
                         final String typeNorm = row.type.trim().toLowerCase();
                         final String nameNorm = row.name.trim().toLowerCase();
                         final String combinedNorm = (typeNorm + " " + nameNorm);
-                        AuditLogger.info("[TRACE] Path 1: Searching sub-task descriptions for: '" + combinedNorm + "' or separately: ['" + typeNorm + "', '" + nameNorm + "']");
+                        row.addTrace("[TRACE] Path 1: Searching sub-task descriptions for: '" + combinedNorm + "' or separately: ['" + typeNorm + "', '" + nameNorm + "']");
 
                         for (JsonElement subEl : subtasksFound) {
                             JsonObject subtask = subEl.getAsJsonObject();
-                            String subtaskKey = subtask.get("key").getAsString();
+                            final String subtaskKey = subtask.get("key").getAsString();
                             JsonObject fieldsObj = subtask.getAsJsonObject("fields");
                             if (fieldsObj == null) continue;
 
@@ -294,13 +312,13 @@ public class AuditAutomator {
                             boolean descMatched = descLower.contains(combinedNorm) || 
                                                   (descLower.contains(typeNorm) && descLower.contains(nameNorm));
 
-                            AuditLogger.info("[TRACE] Path 1: Checking sub-task " + subtaskKey + " description (length: " + descLower.length() + "). Match status: " + descMatched);
+                            row.addTrace("[TRACE] Path 1: Checking sub-task " + subtaskKey + " description (length: " + descLower.length() + "). Match status: " + descMatched);
 
                             if (descMatched) {
                                 JsonObject parentObj = fieldsObj.getAsJsonObject("parent");
                                 if (parentObj != null) {
-                                    String parentTaskKey = parentObj.get("key").getAsString();
-                                    AuditLogger.info("[TRACE] Path 1 SUCCESS: Found linking Task: " + parentTaskKey + " via sub-task: " + subtaskKey);
+                                    final String parentTaskKey = parentObj.get("key").getAsString();
+                                    row.addTrace("[TRACE] Path 1 SUCCESS: Found linking Task: " + parentTaskKey + " via sub-task: " + subtaskKey);
 
                                     // Fetch the parent Task's full details
                                     String parentUrl = jiraUrl + "/rest/api/2/issue/" + parentTaskKey;
@@ -312,7 +330,7 @@ public class AuditAutomator {
                                         if (parentFields != null) {
                                             JsonArray taskSubtasks = parentFields.getAsJsonArray("subtasks");
                                             if (taskSubtasks != null && taskSubtasks.size() > 0) {
-                                                AuditLogger.info("[TRACE] Path 1: Parent Task " + parentTaskKey + " has " + taskSubtasks.size() + " sub-tasks.");
+                                                row.addTrace("[TRACE] Path 1: Parent Task " + parentTaskKey + " has " + taskSubtasks.size() + " sub-tasks.");
                                                 
                                                 // Identify other sub-tasks not containing the releaseId in summary
                                                 List<String> otherSubtaskKeys = new ArrayList<>();
@@ -330,7 +348,7 @@ public class AuditAutomator {
                                                     }
                                                 }
 
-                                                AuditLogger.info("[TRACE] Path 1: Found " + otherSubtaskKeys.size() + " other sub-tasks to check links: " + otherSubtaskKeys);
+                                                row.addTrace("[TRACE] Path 1: Found " + otherSubtaskKeys.size() + " other sub-tasks to check links: " + otherSubtaskKeys);
 
                                                 // Query the other sub-tasks in parallel to find linked Epics
                                                 final List<String> linkedCandidateKeys = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -348,7 +366,7 @@ public class AuditAutomator {
                                                                     if (tSubFields != null) {
                                                                         JsonArray issuelinks = tSubFields.getAsJsonArray("issuelinks");
                                                                         int linksFound = (issuelinks != null) ? issuelinks.size() : 0;
-                                                                        AuditLogger.info("[TRACE] Path 1: Sub-task " + tSubKey + " has " + linksFound + " issue links.");
+                                                                        row.addTrace("[TRACE] Path 1: Sub-task " + tSubKey + " has " + linksFound + " issue links.");
                                                                         if (issuelinks != null) {
                                                                             for (JsonElement linkEl : issuelinks) {
                                                                                 JsonObject link = linkEl.getAsJsonObject();
@@ -362,7 +380,7 @@ public class AuditAutomator {
                                                                                 if (targetIssue != null) {
                                                                                     String targetKey = targetIssue.get("key").getAsString();
                                                                                     if (!linkedCandidateKeys.contains(targetKey)) {
-                                                                                    linkedCandidateKeys.add(targetKey);
+                                                                                        linkedCandidateKeys.add(targetKey);
                                                                                     }
                                                                                 }
                                                                             }
@@ -381,7 +399,7 @@ public class AuditAutomator {
                                                     try { f.get(); } catch (Exception e) {}
                                                 }
 
-                                                AuditLogger.info("[TRACE] Path 1: Aggregated candidate Epic keys from links: " + linkedCandidateKeys);
+                                                row.addTrace("[TRACE] Path 1: Aggregated candidate Epic keys from links: " + linkedCandidateKeys);
 
                                                 // Query all of these candidate Epics' payloads in one JQL search
                                                 if (!linkedCandidateKeys.isEmpty()) {
@@ -400,7 +418,7 @@ public class AuditAutomator {
                                                         JsonObject epicsResponse = JsonParser.parseString(epicsJson).getAsJsonObject();
                                                         JsonArray epicsList = epicsResponse.getAsJsonArray("issues");
                                                         if (epicsList != null && epicsList.size() > 0) {
-                                                            AuditLogger.info("[TRACE] Path 1: Inspecting sub-tasks under linked candidate Epics...");
+                                                            row.addTrace("[TRACE] Path 1: Inspecting sub-tasks under linked candidate Epics...");
                                                             taskLinkSuccess = performCandidateInspection(row, epicsList);
                                                             if (taskLinkSuccess) {
                                                                 return; // Finished auditing row!
@@ -408,10 +426,10 @@ public class AuditAutomator {
                                                         }
                                                     }
                                                 } else {
-                                                    AuditLogger.warn("[TRACE] Path 1: No candidate Epic keys were linked to the other sub-tasks of Task " + parentTaskKey);
+                                                    row.addTrace("[TRACE] Path 1: No candidate Epic keys were linked to the other sub-tasks of Task " + parentTaskKey);
                                                 }
                                             } else {
-                                                AuditLogger.warn("[TRACE] Path 1: Parent Task " + parentTaskKey + " has 0 sub-tasks.");
+                                                row.addTrace("[TRACE] Path 1: Parent Task " + parentTaskKey + " has 0 sub-tasks.");
                                             }
                                         }
                                     }
@@ -419,18 +437,18 @@ public class AuditAutomator {
                             }
                         }
                     } else {
-                        AuditLogger.info("[TRACE] Path 1: No sub-tasks found matching summary '" + row.releaseId + "'");
+                        row.addTrace("[TRACE] Path 1: No sub-tasks found matching summary '" + row.releaseId + "'");
                     }
                 }
             } catch (Exception ex) {
-                AuditLogger.error("[TRACE] Path 1 ERROR: Exception in Task-Link path: " + ex.getMessage());
+                row.addTrace("[TRACE] Path 1 ERROR: Exception in Task-Link path: " + ex.getMessage());
             }
         } else {
-            AuditLogger.info("[TRACE] Release ID '" + row.releaseId + "' is not an SR* release. Skipping Path 1 (Task-Link)...");
+            row.addTrace("[TRACE] Release ID '" + row.releaseId + "' is not an SR* release. Skipping Path 1 (Task-Link)...");
         }
 
         // 2. Direct Comment Path (Fallback Path)
-        AuditLogger.info("[TRACE] Path 2: Querying JIRA comments for Release ID '" + row.releaseId + "'...");
+        row.addTrace("[TRACE] Path 2: Querying JIRA comments for Release ID '" + row.releaseId + "'...");
         String fallbackJql = "project = TFS AND comment ~ \"" + row.releaseId + "\"";
         String fallbackUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(fallbackJql, "UTF-8") + "&maxResults=1000";
 
@@ -444,10 +462,10 @@ public class AuditAutomator {
         JsonObject fbResponse = JsonParser.parseString(fallbackJson).getAsJsonObject();
         JsonArray fbCandidates = fbResponse.getAsJsonArray("issues");
         int fbTotal = fbResponse.get("total").getAsInt();
-        AuditLogger.info("[TRACE] Path 2: Found " + fbTotal + " candidate issues via direct comments search.");
+        row.addTrace("[TRACE] Path 2: Found " + fbTotal + " candidate issues via direct comments search.");
         
         if (fbCandidates != null && fbCandidates.size() > 0) {
-            AuditLogger.info("[TRACE] Path 2: Inspecting sub-tasks under comment-linked candidate issues...");
+            row.addTrace("[TRACE] Path 2: Inspecting sub-tasks under comment-linked candidate issues...");
             boolean fallbackSuccess = performCandidateInspection(row, fbCandidates);
             if (fallbackSuccess) {
                 return; // Finished auditing row!
@@ -457,20 +475,20 @@ public class AuditAutomator {
         // If we reach here, neither path found a match!
         row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
         row.notes = "No matching sub-task found for type/name under candidates on both paths.";
-        AuditLogger.warn("[TRACE] FAILED: Release ID '" + row.releaseId + "' audit complete. No matching sub-task found on either path.");
+        row.addTrace("[TRACE] FAILED: Release ID '" + row.releaseId + "' audit complete. No matching sub-task found on either path.");
     }
 
-    private boolean performCandidateInspection(AuditRow row, JsonArray candidates) throws Exception {
+    private boolean performCandidateInspection(final AuditRow row, JsonArray candidates) throws Exception {
         for (JsonElement candEl : candidates) {
             JsonObject candidate = candEl.getAsJsonObject();
-            String candidateKey = candidate.get("key").getAsString();
+            final String candidateKey = candidate.get("key").getAsString();
             JsonObject candFields = candidate.getAsJsonObject("fields");
             if (candFields == null) continue;
 
             JsonObject candTypeObj = candFields.getAsJsonObject("issuetype");
             String candTypeName = candTypeObj != null ? candTypeObj.get("name").getAsString() : "";
 
-            AuditLogger.info("[TRACE] Inspecting candidate: " + candidateKey + " (IssueType: " + candTypeName + ")");
+            row.addTrace("[TRACE] Inspecting candidate: " + candidateKey + " (IssueType: " + candTypeName + ")");
 
             List<SubtaskInspectionTask> inspectionTasks = new ArrayList<>();
 
@@ -478,7 +496,7 @@ public class AuditAutomator {
             if ("Epic".equalsIgnoreCase(candTypeName)) {
                 JsonArray subtasks = candFields.getAsJsonArray("subtasks");
                 int directCount = (subtasks != null) ? subtasks.size() : 0;
-                AuditLogger.info("[TRACE] Epic " + candidateKey + " has " + directCount + " direct sub-tasks.");
+                row.addTrace("[TRACE] Epic " + candidateKey + " has " + directCount + " direct sub-tasks.");
                 if (subtasks != null) {
                     for (JsonElement subEl : subtasks) {
                         inspectionTasks.add(new SubtaskInspectionTask(
@@ -491,30 +509,30 @@ public class AuditAutomator {
 
                 try {
                     String storyJql = "\"epic link\" = " + candidateKey + " OR parent = " + candidateKey;
-                    AuditLogger.info("[TRACE] Epic " + candidateKey + ": Querying child stories via: " + storyJql);
+                    row.addTrace("[TRACE] Epic " + candidateKey + ": Querying child stories via: " + storyJql);
                     String storyUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(storyJql, "UTF-8") + "&maxResults=1000";
                     String storyResultJson = executeHttpGetWithRetry(storyUrl);
                     if (storyResultJson != null) {
                         JsonObject storyResponse = JsonParser.parseString(storyResultJson).getAsJsonObject();
                         JsonArray stories = storyResponse.getAsJsonArray("issues");
                         int storyCount = (stories != null) ? stories.size() : 0;
-                        AuditLogger.info("[TRACE] Epic " + candidateKey + " has " + storyCount + " child stories.");
+                        row.addTrace("[TRACE] Epic " + candidateKey + " has " + storyCount + " child stories.");
                         if (stories != null) {
                             for (JsonElement storyEl : stories) {
                                 JsonObject story = storyEl.getAsJsonObject();
-                                String storyKey = story.get("key").getAsString();
+                                final String storyKey = story.get("key").getAsString();
                                 JsonObject storyFields = story.getAsJsonObject("fields");
                                 if (storyFields != null) {
                                     JsonObject issueTypeObj = storyFields.getAsJsonObject("issuetype");
                                     String typeName = issueTypeObj != null ? issueTypeObj.get("name").getAsString() : "";
                                     if ("Test".equalsIgnoreCase(typeName) || "Test Execution".equalsIgnoreCase(typeName)) {
-                                        AuditLogger.info("[TRACE] Ignoring child issue " + storyKey + " because its type is: " + typeName);
+                                        row.addTrace("[TRACE] Ignoring child issue " + storyKey + " because its type is: " + typeName);
                                         continue;
                                     }
 
                                     JsonArray storySubtasks = storyFields.getAsJsonArray("subtasks");
                                     int storySubCount = (storySubtasks != null) ? storySubtasks.size() : 0;
-                                    AuditLogger.info("[TRACE] Child Story " + storyKey + " has " + storySubCount + " sub-tasks.");
+                                    row.addTrace("[TRACE] Child Story " + storyKey + " has " + storySubCount + " sub-tasks.");
                                     if (storySubtasks != null) {
                                         for (JsonElement subEl : storySubtasks) {
                                             inspectionTasks.add(new SubtaskInspectionTask(
@@ -535,7 +553,7 @@ public class AuditAutomator {
                 // B. Story, PTR, FCR, etc.
                 JsonArray subtasks = candFields.getAsJsonArray("subtasks");
                 int subCount = (subtasks != null) ? subtasks.size() : 0;
-                AuditLogger.info("[TRACE] Candidate " + candidateKey + " has " + subCount + " direct sub-tasks.");
+                row.addTrace("[TRACE] Candidate " + candidateKey + " has " + subCount + " direct sub-tasks.");
                 if (subtasks != null) {
                     for (JsonElement subEl : subtasks) {
                         inspectionTasks.add(new SubtaskInspectionTask(
@@ -547,7 +565,7 @@ public class AuditAutomator {
                 }
             }
 
-            AuditLogger.info("[TRACE] Gathered total of " + inspectionTasks.size() + " sub-task query tasks for candidate " + candidateKey);
+            row.addTrace("[TRACE] Gathered total of " + inspectionTasks.size() + " sub-task query tasks for candidate " + candidateKey);
 
             if (!inspectionTasks.isEmpty()) {
                 final String searchString = (row.type.trim() + " " + row.name.trim()).toLowerCase();
@@ -584,7 +602,7 @@ public class AuditAutomator {
                                 boolean matchSummary = summary.toLowerCase().trim().startsWith(searchString);
                                 boolean matchDesc = description.toLowerCase().contains(searchString);
 
-                                AuditLogger.info("[TRACE] Comparing sub-task " + task.subtaskKey + " (parent: " + task.parentKey + "): Summary='" + summary + "' StartsWith='" + searchString + "'? " + matchSummary + "; Description Contains='" + searchString + "'? " + matchDesc);
+                                row.addTrace("[TRACE] Comparing sub-task " + task.subtaskKey + " (parent: " + task.parentKey + "): Summary='" + summary + "' StartsWith='" + searchString + "'? " + matchSummary + "; Description Contains='" + searchString + "'? " + matchDesc);
 
                                 if (matchSummary || matchDesc) {
                                     test3Passed.set(true);
@@ -595,7 +613,7 @@ public class AuditAutomator {
                                             matchedParentKey.append(task.parentKey);
                                             matchedParentPayload.clear();
                                             matchedParentPayload.add(task.parentPayload);
-                                            AuditLogger.info("[TRACE] MATCH FOUND on sub-task " + task.subtaskKey + "! Setting target parent key to: " + task.parentKey);
+                                            row.addTrace("[TRACE] MATCH FOUND on sub-task " + task.subtaskKey + "! Setting target parent key to: " + task.parentKey);
                                         }
                                     }
                                 }
@@ -605,7 +623,7 @@ public class AuditAutomator {
                                     qaTaskFound.set(true);
                                     JsonObject subStatus = subFields.getAsJsonObject("status");
                                     String subStatusName = subStatus != null ? subStatus.get("name").getAsString() : "";
-                                    AuditLogger.info("[TRACE] Found QA task " + task.subtaskKey + " with status: " + subStatusName);
+                                    row.addTrace("[TRACE] Found QA task " + task.subtaskKey + " with status: " + subStatusName);
                                     if ("Passed".equalsIgnoreCase(subStatusName) ||
                                         "Accepted".equalsIgnoreCase(subStatusName) ||
                                         "Done".equalsIgnoreCase(subStatusName)) {
@@ -629,7 +647,7 @@ public class AuditAutomator {
                     JsonObject finalParentFields = finalParent.getAsJsonObject("fields");
 
                     row.jiraNum = finalParentKey;
-                    AuditLogger.info("[TRACE] Resolving compliance metrics for matched parent JIRA key: " + finalParentKey);
+                    row.addTrace("[TRACE] Resolving compliance metrics for matched parent JIRA key: " + finalParentKey);
 
                     JsonObject issueType = finalParentFields.getAsJsonObject("issuetype");
                     String typeName = issueType != null ? issueType.get("name").getAsString() : "";
