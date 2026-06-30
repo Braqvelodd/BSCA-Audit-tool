@@ -1,0 +1,5 @@
+# Ignore build and runtime outputs
+bin/
+dist/
+*.log
+config.ini
