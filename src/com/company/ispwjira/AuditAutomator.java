@@ -946,39 +946,47 @@ public class AuditAutomator {
             JsonObject candFields = candidate.getAsJsonObject("fields");
             if (candFields == null) return "";
 
+            String rawSummary = "";
             if ("Epic".equalsIgnoreCase(candTypeName)) {
-                return candFields.has("summary") && !candFields.get("summary").isJsonNull() 
+                rawSummary = candFields.has("summary") && !candFields.get("summary").isJsonNull() 
                         ? candFields.get("summary").getAsString() : "";
-            }
-
-            // Check parent field
-            if (candFields.has("parent")) {
-                JsonObject parentObj = candFields.getAsJsonObject("parent");
-                JsonObject parentFields = parentObj.getAsJsonObject("fields");
-                if (parentFields != null) {
-                    JsonObject parentTypeObj = parentFields.getAsJsonObject("issuetype");
-                    String parentTypeName = parentTypeObj != null ? parentTypeObj.get("name").getAsString() : "";
-                    if ("Epic".equalsIgnoreCase(parentTypeName)) {
-                        return parentFields.has("summary") && !parentFields.get("summary").isJsonNull() 
-                                ? parentFields.get("summary").getAsString() : "";
+            } else {
+                // Check parent field
+                if (candFields.has("parent")) {
+                    JsonObject parentObj = candFields.getAsJsonObject("parent");
+                    JsonObject parentFields = parentObj.getAsJsonObject("fields");
+                    if (parentFields != null) {
+                        JsonObject parentTypeObj = parentFields.getAsJsonObject("issuetype");
+                        String parentTypeName = parentTypeObj != null ? parentTypeObj.get("name").getAsString() : "";
+                        if ("Epic".equalsIgnoreCase(parentTypeName)) {
+                            rawSummary = parentFields.has("summary") && !parentFields.get("summary").isJsonNull() 
+                                    ? parentFields.get("summary").getAsString() : "";
+                        }
                     }
                 }
-            }
 
-            // Check epic field
-            if (candFields.has("epic")) {
-                JsonObject epicObj = candFields.getAsJsonObject("epic");
-                JsonObject epicFields = epicObj.getAsJsonObject("fields");
-                if (epicFields != null && epicFields.has("summary") && !epicFields.get("summary").isJsonNull()) {
-                    return epicFields.get("summary").getAsString();
-                } else if (epicObj.has("summary") && !epicObj.get("summary").isJsonNull()) {
-                    return epicObj.get("summary").getAsString();
+                // Check epic field
+                if (rawSummary.isEmpty() && candFields.has("epic")) {
+                    JsonObject epicObj = candFields.getAsJsonObject("epic");
+                    JsonObject epicFields = epicObj.getAsJsonObject("fields");
+                    if (epicFields != null && epicFields.has("summary") && !epicFields.get("summary").isJsonNull()) {
+                        rawSummary = epicFields.get("summary").getAsString();
+                    } else if (epicObj.has("summary") && !epicObj.get("summary").isJsonNull()) {
+                        rawSummary = epicObj.get("summary").getAsString();
+                    }
+                }
+
+                // Fallback: candidate's own summary
+                if (rawSummary.isEmpty()) {
+                    rawSummary = candFields.has("summary") && !candFields.get("summary").isJsonNull() 
+                            ? candFields.get("summary").getAsString() : "";
                 }
             }
 
-            // Fallback: candidate's own summary
-            return candFields.has("summary") && !candFields.get("summary").isJsonNull() 
-                    ? candFields.get("summary").getAsString() : "";
+            if (rawSummary == null || rawSummary.trim().isEmpty()) {
+                return "";
+            }
+            return rawSummary.trim().split("\\s+")[0];
         } catch (Exception e) {
             return "";
         }
