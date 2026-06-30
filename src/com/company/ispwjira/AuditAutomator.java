@@ -262,29 +262,178 @@ public class AuditAutomator {
             return;
         }
 
-        // 1. Resolve JQL Search to get candidate issues matching the Release ID
-        String jqlQuery = "project = TFS AND comment ~ \"" + row.releaseId + "\"";
-        String searchUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(jqlQuery, "UTF-8");
+        // 1. Task-Link Path (Primary Path)
+        boolean taskLinkSuccess = false;
+        try {
+            AuditLogger.info("Starting Task-Link path search for Release ID: " + row.releaseId);
+            String subtaskJql = "project = TFS AND issuetype = Sub-task AND summary ~ \"" + row.releaseId + "\"";
+            String subtaskSearchUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(subtaskJql, "UTF-8");
+            String subtaskSearchJson = executeHttpGetWithRetry(subtaskSearchUrl);
+            
+            if (subtaskSearchJson != null) {
+                JsonObject subtaskSearchResponse = JsonParser.parseString(subtaskSearchJson).getAsJsonObject();
+                JsonArray subtasksFound = subtaskSearchResponse.getAsJsonArray("issues");
+                
+                if (subtasksFound != null && subtasksFound.size() > 0) {
+                    final String typeNorm = row.type.trim().toLowerCase();
+                    final String nameNorm = row.name.trim().toLowerCase();
+                    final String combinedNorm = (typeNorm + " " + nameNorm);
 
-        String searchResultJson = executeHttpGetWithRetry(searchUrl);
-        if (searchResultJson == null) {
+                    for (JsonElement subEl : subtasksFound) {
+                        JsonObject subtask = subEl.getAsJsonObject();
+                        JsonObject fieldsObj = subtask.getAsJsonObject("fields");
+                        if (fieldsObj == null) continue;
+
+                        String description = fieldsObj.get("description") != null && !fieldsObj.get("description").isJsonNull()
+                                ? fieldsObj.get("description").getAsString() : "";
+                        String descLower = description.toLowerCase();
+
+                        // Match logic: Combined type+name OR both type and name separately
+                        boolean descMatched = descLower.contains(combinedNorm) || 
+                                              (descLower.contains(typeNorm) && descLower.contains(nameNorm));
+
+                        if (descMatched) {
+                            JsonObject parentObj = fieldsObj.getAsJsonObject("parent");
+                            if (parentObj != null) {
+                                String parentTaskKey = parentObj.get("key").getAsString();
+                                AuditLogger.info("Found linking Task via sub-task description: " + parentTaskKey);
+
+                                // Fetch the parent Task's full details
+                                String parentUrl = jiraUrl + "/rest/api/2/issue/" + parentTaskKey;
+                                String parentJson = executeHttpGetWithRetry(parentUrl);
+                                if (parentJson != null) {
+                                    JsonObject parentPayload = JsonParser.parseString(parentJson).getAsJsonObject();
+                                    JsonObject parentFields = parentPayload.getAsJsonObject("fields");
+                                    
+                                    if (parentFields != null) {
+                                        JsonArray taskSubtasks = parentFields.getAsJsonArray("subtasks");
+                                        if (taskSubtasks != null && taskSubtasks.size() > 0) {
+                                            // Identify other sub-tasks not containing the releaseId in summary
+                                            List<String> otherSubtaskKeys = new ArrayList<>();
+                                            for (JsonElement tSubEl : taskSubtasks) {
+                                                JsonObject tSub = tSubEl.getAsJsonObject();
+                                                String tSubKey = tSub.get("key").getAsString();
+                                                JsonObject tSubFields = tSub.getAsJsonObject("fields");
+                                                String tSubSummary = "";
+                                                if (tSubFields != null && tSubFields.get("summary") != null) {
+                                                    tSubSummary = tSubFields.get("summary").getAsString();
+                                                }
+                                                
+                                                if (!tSubSummary.toLowerCase().contains(row.releaseId.toLowerCase())) {
+                                                    otherSubtaskKeys.add(tSubKey);
+                                                }
+                                            }
+
+                                            // Query the other sub-tasks in parallel to find linked Epics
+                                            final List<String> linkedCandidateKeys = new java.util.concurrent.CopyOnWriteArrayList<>();
+                                            List<Future<?>> subtaskDetailFutures = new ArrayList<>();
+                                            for (final String tSubKey : otherSubtaskKeys) {
+                                                subtaskDetailFutures.add(subtaskExecutorService.submit(new Runnable() {
+                                                    @Override
+                                                    public void run() {
+                                                        try {
+                                                            String tSubUrl = jiraUrl + "/rest/api/2/issue/" + tSubKey;
+                                                            String tSubJson = executeHttpGetWithRetry(tSubUrl);
+                                                            if (tSubJson != null) {
+                                                                JsonObject tSubPayload = JsonParser.parseString(tSubJson).getAsJsonObject();
+                                                                JsonObject tSubFields = tSubPayload.getAsJsonObject("fields");
+                                                                if (tSubFields != null) {
+                                                                    JsonArray issuelinks = tSubFields.getAsJsonArray("issuelinks");
+                                                                    if (issuelinks != null) {
+                                                                        for (JsonElement linkEl : issuelinks) {
+                                                                            JsonObject link = linkEl.getAsJsonObject();
+                                                                            JsonObject targetIssue = null;
+                                                                            if (link.has("inwardIssue")) {
+                                                                                targetIssue = link.getAsJsonObject("inwardIssue");
+                                                                            } else if (link.has("outwardIssue")) {
+                                                                                targetIssue = link.getAsJsonObject("outwardIssue");
+                                                                            }
+                                                                            
+                                                                            if (targetIssue != null) {
+                                                                                String targetKey = targetIssue.get("key").getAsString();
+                                                                                if (!linkedCandidateKeys.contains(targetKey)) {
+                                                                                    linkedCandidateKeys.add(targetKey);
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        } catch (Exception ex) {
+                                                            AuditLogger.error("Failed to fetch sub-task links for " + tSubKey + ": " + ex.getMessage());
+                                                        }
+                                                    }
+                                                }));
+                                            }
+
+                                            // Wait for all links to be extracted
+                                            for (Future<?> f : subtaskDetailFutures) {
+                                                try { f.get(); } catch (Exception e) {}
+                                            }
+
+                                            // Query all of these candidate Epics' payloads in one JQL search
+                                            if (!linkedCandidateKeys.isEmpty()) {
+                                                StringBuilder jqlBuilder = new StringBuilder("key in (");
+                                                for (int i = 0; i < linkedCandidateKeys.size(); i++) {
+                                                    jqlBuilder.append(linkedCandidateKeys.get(i));
+                                                    if (i < linkedCandidateKeys.size() - 1) {
+                                                        jqlBuilder.append(",");
+                                                    }
+                                                }
+                                                jqlBuilder.append(")");
+                                                
+                                                String epicsUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(jqlBuilder.toString(), "UTF-8");
+                                                String epicsJson = executeHttpGetWithRetry(epicsUrl);
+                                                if (epicsJson != null) {
+                                                    JsonObject epicsResponse = JsonParser.parseString(epicsJson).getAsJsonObject();
+                                                    JsonArray epicsList = epicsResponse.getAsJsonArray("issues");
+                                                    if (epicsList != null && epicsList.size() > 0) {
+                                                        taskLinkSuccess = performCandidateInspection(row, epicsList);
+                                                        if (taskLinkSuccess) {
+                                                            return; // Finished auditing row!
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            AuditLogger.error("Error running Task-Link JIRA path: " + ex.getMessage());
+        }
+
+        // 2. Direct Comment Path (Fallback Path)
+        AuditLogger.info("Task-Link path did not find Epic for " + row.releaseId + ". Running Direct Comment search fallback...");
+        String fallbackJql = "project = TFS AND comment ~ \"" + row.releaseId + "\"";
+        String fallbackUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(fallbackJql, "UTF-8");
+
+        String fallbackJson = executeHttpGetWithRetry(fallbackUrl);
+        if (fallbackJson == null) {
             row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
-            row.notes = "Jira API unreachable.";
+            row.notes = "Jira API unreachable on fallback.";
             return;
         }
 
-        JsonObject searchResponse = JsonParser.parseString(searchResultJson).getAsJsonObject();
-        JsonArray candidates = searchResponse.getAsJsonArray("issues");
-        int totalIssues = searchResponse.get("total").getAsInt();
-
-        if (totalIssues == 0 || candidates == null || candidates.size() == 0) {
-            row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
-            row.notes = "No linked Jira issue found for Release ID.";
-            AuditLogger.warn("JQL returned 0 candidates for Release ID: " + row.releaseId);
-            return;
+        JsonObject fbResponse = JsonParser.parseString(fallbackJson).getAsJsonObject();
+        JsonArray fbCandidates = fbResponse.getAsJsonArray("issues");
+        if (fbCandidates != null && fbCandidates.size() > 0) {
+            boolean fallbackSuccess = performCandidateInspection(row, fbCandidates);
+            if (fallbackSuccess) {
+                return; // Finished auditing row!
+            }
         }
 
-        // We will inspect each candidate to find the one that has the matching sub-task
+        // If we reach here, neither path found a match!
+        row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
+        row.notes = "No matching sub-task found for type/name under candidates on both paths.";
+    }
+
+    private boolean performCandidateInspection(AuditRow row, JsonArray candidates) throws Exception {
         for (JsonElement candEl : candidates) {
             JsonObject candidate = candEl.getAsJsonObject();
             String candidateKey = candidate.get("key").getAsString();
@@ -294,24 +443,21 @@ public class AuditAutomator {
             JsonObject candTypeObj = candFields.getAsJsonObject("issuetype");
             String candTypeName = candTypeObj != null ? candTypeObj.get("name").getAsString() : "";
 
-            // We will gather all subtasks and associate them with their respective parent (Epic or Story/PTR/etc.)
             List<SubtaskInspectionTask> inspectionTasks = new ArrayList<>();
 
-            // A. If the candidate is an Epic, we look at direct subtasks AND child stories' subtasks
+            // A. Epic: direct subtasks + child stories' subtasks
             if ("Epic".equalsIgnoreCase(candTypeName)) {
-                // A1. Direct subtasks of the Epic
                 JsonArray subtasks = candFields.getAsJsonArray("subtasks");
                 if (subtasks != null) {
                     for (JsonElement subEl : subtasks) {
                         inspectionTasks.add(new SubtaskInspectionTask(
                             subEl.getAsJsonObject().get("key").getAsString(),
-                            candidateKey, // Parent is the Epic itself
-                            candidate // Parent payload is the Epic payload
+                            candidateKey,
+                            candidate
                         ));
                     }
                 }
 
-                // A2. Stories linked to this Epic
                 try {
                     String storyJql = "\"epic link\" = " + candidateKey + " OR parent = " + candidateKey;
                     String storyUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(storyJql, "UTF-8");
@@ -330,8 +476,8 @@ public class AuditAutomator {
                                         for (JsonElement subEl : storySubtasks) {
                                             inspectionTasks.add(new SubtaskInspectionTask(
                                                 subEl.getAsJsonObject().get("key").getAsString(),
-                                                storyKey, // Parent is the Story key
-                                                story // Parent payload is the Story payload
+                                                storyKey,
+                                                story
                                             ));
                                         }
                                     }
@@ -343,20 +489,19 @@ public class AuditAutomator {
                     AuditLogger.error("Failed to query child stories for Epic " + candidateKey + ": " + ex.getMessage());
                 }
             } else {
-                // B. If candidate is a Story, PTR, FCR, etc.
+                // B. Story, PTR, FCR, etc.
                 JsonArray subtasks = candFields.getAsJsonArray("subtasks");
                 if (subtasks != null) {
                     for (JsonElement subEl : subtasks) {
                         inspectionTasks.add(new SubtaskInspectionTask(
                             subEl.getAsJsonObject().get("key").getAsString(),
-                            candidateKey, // Parent is this Story/PTR/etc.
-                            candidate // Parent payload
+                            candidateKey,
+                            candidate
                         ));
                     }
                 }
             }
 
-            // Check all gathered sub-tasks for this candidate in parallel
             if (!inspectionTasks.isEmpty()) {
                 final String searchString = (row.type.trim() + " " + row.name.trim()).toLowerCase();
                 final AtomicBoolean test3Passed = new AtomicBoolean(false);
@@ -364,7 +509,6 @@ public class AuditAutomator {
                 final AtomicBoolean qaTaskFound = new AtomicBoolean(false);
                 final AtomicBoolean matched = new AtomicBoolean(false);
 
-                // Track which parent was matched
                 final StringBuilder matchedParentKey = new StringBuilder();
                 final List<JsonObject> matchedParentPayload = new ArrayList<>();
 
@@ -374,7 +518,7 @@ public class AuditAutomator {
                         @Override
                         public void run() {
                             if (matched.get() && test3Passed.get() && qaPassed.get()) {
-                                return; // Short-circuit
+                                return;
                             }
 
                             try {
@@ -406,7 +550,6 @@ public class AuditAutomator {
                                     }
                                 }
 
-                                // Check QA task status under this parent
                                 boolean isQaTask = summary.toLowerCase().contains("qa") || summary.toLowerCase().contains("test");
                                 if (isQaTask) {
                                     qaTaskFound.set(true);
@@ -425,14 +568,10 @@ public class AuditAutomator {
                     }));
                 }
 
-                // Wait for all subtask checks
                 for (Future<?> f : subtaskFutures) {
-                    try {
-                        f.get();
-                    } catch (Exception ex) {}
+                    try { f.get(); } catch (Exception ex) {}
                 }
 
-                // If we found a matching sub-task, run compliance audits on the matched parent issue!
                 if (matched.get()) {
                     String finalParentKey = matchedParentKey.toString();
                     JsonObject finalParent = matchedParentPayload.get(0);
@@ -440,7 +579,6 @@ public class AuditAutomator {
 
                     row.jiraNum = finalParentKey;
 
-                    // TEST 1: Work Type Check
                     JsonObject issueType = finalParentFields.getAsJsonObject("issuetype");
                     String typeName = issueType != null ? issueType.get("name").getAsString() : "";
                     if ("Epic".equalsIgnoreCase(typeName)) {
@@ -458,7 +596,6 @@ public class AuditAutomator {
                         AuditLogger.warn(finalParentKey + " TEST 1 Failed: Issue type is " + typeName);
                     }
 
-                    // TEST 2: Authorization check
                     try {
                         JsonObject statusObj = finalParentFields.getAsJsonObject("status");
                         String statusName = statusObj != null ? statusObj.get("name").getAsString() : "";
@@ -477,17 +614,14 @@ public class AuditAutomator {
                         row.test2 = "N";
                     }
 
-                    // TEST 3: Evidence check (we found it!)
                     row.test3 = "Y";
 
-                    // TEST 4: QA checks under this matching parent
                     if (qaTaskFound.get()) {
                         row.test4 = qaPassed.get() ? "Y" : "N";
                     } else {
                         row.test4 = "N";
                     }
 
-                    // TEST 5: fixVersions released check on parent
                     try {
                         JsonArray fixVersions = finalParentFields.getAsJsonArray("fixVersions");
                         if (fixVersions != null && fixVersions.size() > 0) {
@@ -506,14 +640,11 @@ public class AuditAutomator {
                     }
 
                     row.notes = "Audit successful.";
-                    return; // COMPLETED AUDIT FOR ROW!
+                    return true;
                 }
             }
         }
-
-        // If we reach here, we checked all candidates and found no matching sub-task!
-        row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
-        row.notes = "No matching sub-task found for type/name under candidates.";
+        return false;
     }
 
     private String executeHttpGetWithRetry(String url) throws Exception {
