@@ -488,6 +488,19 @@ public class AuditAutomator {
     }
 
     private boolean performCandidateInspection(final AuditRow row, JsonArray candidates) throws Exception {
+        List<String> matchedEpicSummaries = new ArrayList<>();
+        boolean overallMatched = false;
+        boolean overallMatchedViaSummary = false;
+        boolean overallMatchedViaDesc = false;
+
+        String firstMatchedJiraNum = null;
+        String firstMatchedWorkType = null;
+        String firstMatchedTest1 = null;
+        String firstMatchedTest2 = null;
+        String firstMatchedTest3 = null;
+        String firstMatchedTest4 = null;
+        String firstMatchedTest5 = null;
+
         for (JsonElement candEl : candidates) {
             JsonObject candidate = candEl.getAsJsonObject();
             final String candidateKey = candidate.get("key").getAsString();
@@ -649,127 +662,161 @@ public class AuditAutomator {
                 }
 
                 if (matched.get()) {
-                    String finalParentKey = matchedParentKey.toString();
-                    JsonObject finalParent = matchedParentPayload.get(0);
-                    JsonObject finalParentFields = finalParent.getAsJsonObject("fields");
-
-                    row.jiraNum = finalParentKey;
-                    row.addTrace("[TRACE] Resolving compliance metrics for matched parent JIRA key: " + finalParentKey);
-
-                    JsonObject issueType = finalParentFields.getAsJsonObject("issuetype");
-                    String typeName = issueType != null ? issueType.get("name").getAsString() : "";
-                    if ("Epic".equalsIgnoreCase(typeName)) {
-                        row.workType = "SCR";
-                    } else {
-                        row.workType = typeName;
+                    overallMatched = true;
+                    if (matchedViaSummary.get()) {
+                        overallMatchedViaSummary = true;
+                    }
+                    if (matchedViaDesc.get()) {
+                        overallMatchedViaDesc = true;
                     }
 
-                    if ("Epic".equalsIgnoreCase(typeName) || "Story".equalsIgnoreCase(typeName) ||
-                        "PTR".equalsIgnoreCase(typeName) || "FCR".equalsIgnoreCase(typeName) ||
-                        "Utility".equalsIgnoreCase(typeName) || "Extract".equalsIgnoreCase(typeName)) {
-                        row.test1 = "Y";
-                    } else {
-                        row.test1 = "N";
-                        AuditLogger.warn(finalParentKey + " TEST 1 Failed: Issue type is " + typeName);
+                    String epicSum = getEpicSummary(candidate, candTypeName);
+                    if (epicSum != null && !epicSum.isEmpty() && !matchedEpicSummaries.contains(epicSum)) {
+                        matchedEpicSummaries.add(epicSum);
                     }
 
-                    try {
-                        JsonObject statusObj = finalParentFields.getAsJsonObject("status");
-                        String statusName = statusObj != null ? statusObj.get("name").getAsString() : "";
-                        JsonElement authField = finalParentFields.get("customfield_auth");
-                        String authFieldValue = (authField != null && !authField.isJsonNull()) ? authField.getAsString() : null;
+                    if (firstMatchedJiraNum == null) {
+                        String finalParentKey = matchedParentKey.toString();
+                        JsonObject finalParent = matchedParentPayload.get(0);
+                        JsonObject finalParentFields = finalParent.getAsJsonObject("fields");
 
-                        if ("Approved".equalsIgnoreCase(statusName) || "Released".equalsIgnoreCase(statusName) ||
-                            "Done".equalsIgnoreCase(statusName) || "Resolved".equalsIgnoreCase(statusName) ||
-                            (authFieldValue != null && !authFieldValue.trim().isEmpty())) {
-                            row.test2 = "Y";
+                        firstMatchedJiraNum = finalParentKey;
+
+                        JsonObject issueType = finalParentFields.getAsJsonObject("issuetype");
+                        String typeName = issueType != null ? issueType.get("name").getAsString() : "";
+                        if ("Epic".equalsIgnoreCase(typeName)) {
+                            firstMatchedWorkType = "SCR";
                         } else {
-                            row.test2 = "N";
-                            AuditLogger.warn(finalParentKey + " TEST 2 Failed: Status is " + statusName);
+                            firstMatchedWorkType = typeName;
                         }
-                    } catch (Exception e) {
-                        row.test2 = "N";
-                    }
 
-                    row.test3 = "Y";
+                        if ("Epic".equalsIgnoreCase(typeName) || "Story".equalsIgnoreCase(typeName) ||
+                            "PTR".equalsIgnoreCase(typeName) || "FCR".equalsIgnoreCase(typeName) ||
+                            "Utility".equalsIgnoreCase(typeName) || "Extract".equalsIgnoreCase(typeName)) {
+                            firstMatchedTest1 = "Y";
+                        } else {
+                            firstMatchedTest1 = "N";
+                            AuditLogger.warn(finalParentKey + " TEST 1 Failed: Issue type is " + typeName);
+                        }
 
-                    row.test4 = "N";
-                    try {
-                        JsonArray issuelinks = finalParentFields.getAsJsonArray("issuelinks");
-                        if (issuelinks != null) {
-                            for (JsonElement linkEl : issuelinks) {
-                                JsonObject link = linkEl.getAsJsonObject();
-                                JsonObject linkType = link.getAsJsonObject("type");
-                                String linkTypeName = linkType != null && linkType.get("name") != null 
-                                        ? linkType.get("name").getAsString() : "";
-                                
-                                if ("tested by".equalsIgnoreCase(linkTypeName)) {
-                                    JsonObject targetIssue = null;
-                                    if (link.has("inwardIssue")) {
-                                        targetIssue = link.getAsJsonObject("inwardIssue");
-                                    } else if (link.has("outwardIssue")) {
-                                        targetIssue = link.getAsJsonObject("outwardIssue");
-                                    }
+                        try {
+                            JsonObject statusObj = finalParentFields.getAsJsonObject("status");
+                            String statusName = statusObj != null ? statusObj.get("name").getAsString() : "";
+                            JsonElement authField = finalParentFields.get("customfield_auth");
+                            String authFieldValue = (authField != null && !authField.isJsonNull()) ? authField.getAsString() : null;
+
+                            if ("Approved".equalsIgnoreCase(statusName) || "Released".equalsIgnoreCase(statusName) ||
+                                "Done".equalsIgnoreCase(statusName) || "Resolved".equalsIgnoreCase(statusName) ||
+                                (authFieldValue != null && !authFieldValue.trim().isEmpty())) {
+                                firstMatchedTest2 = "Y";
+                            } else {
+                                firstMatchedTest2 = "N";
+                                AuditLogger.warn(finalParentKey + " TEST 2 Failed: Status is " + statusName);
+                            }
+                        } catch (Exception e) {
+                            firstMatchedTest2 = "N";
+                        }
+
+                        firstMatchedTest3 = "Y";
+
+                        firstMatchedTest4 = "N";
+                        try {
+                            JsonArray issuelinks = finalParentFields.getAsJsonArray("issuelinks");
+                            if (issuelinks != null) {
+                                for (JsonElement linkEl : issuelinks) {
+                                    JsonObject link = linkEl.getAsJsonObject();
+                                    JsonObject linkType = link.getAsJsonObject("type");
+                                    String linkTypeName = linkType != null && linkType.get("name") != null 
+                                            ? linkType.get("name").getAsString() : "";
                                     
-                                    if (targetIssue != null) {
-                                        String testKey = targetIssue.get("key").getAsString();
-                                        row.addTrace("[TRACE] Found XRAY Test link: " + testKey + " under parent " + finalParentKey);
+                                    if ("tested by".equalsIgnoreCase(linkTypeName)) {
+                                        JsonObject targetIssue = null;
+                                        if (link.has("inwardIssue")) {
+                                            targetIssue = link.getAsJsonObject("inwardIssue");
+                                        } else if (link.has("outwardIssue")) {
+                                            targetIssue = link.getAsJsonObject("outwardIssue");
+                                        }
                                         
-                                        // Fetch the Test issue's full details to inspect status
-                                        String testUrl = jiraUrl + "/rest/api/2/issue/" + testKey;
-                                        String testJson = executeHttpGetWithRetry(testUrl);
-                                        if (testJson != null) {
-                                            JsonObject testPayload = JsonParser.parseString(testJson).getAsJsonObject();
-                                            JsonObject testFields = testPayload.getAsJsonObject("fields");
-                                            if (testFields != null) {
-                                                JsonObject testStatus = testFields.getAsJsonObject("status");
-                                                String testStatusName = testStatus != null && testStatus.get("name") != null 
-                                                        ? testStatus.get("name").getAsString() : "";
-                                                row.addTrace("[TRACE] Test " + testKey + " status is: " + testStatusName);
-                                                if ("Pass".equalsIgnoreCase(testStatusName) || 
-                                                    "Passed".equalsIgnoreCase(testStatusName) || 
-                                                    "Approved".equalsIgnoreCase(testStatusName)) {
-                                                    row.test4 = "Y";
-                                                    break; // Found an approved test!
+                                        if (targetIssue != null) {
+                                            String testKey = targetIssue.get("key").getAsString();
+                                            row.addTrace("[TRACE] Found XRAY Test link: " + testKey + " under parent " + finalParentKey);
+                                            
+                                            // Fetch the Test issue's full details to inspect status
+                                            String testUrl = jiraUrl + "/rest/api/2/issue/" + testKey;
+                                            String testJson = executeHttpGetWithRetry(testUrl);
+                                            if (testJson != null) {
+                                                JsonObject testPayload = JsonParser.parseString(testJson).getAsJsonObject();
+                                                JsonObject testFields = testPayload.getAsJsonObject("fields");
+                                                if (testFields != null) {
+                                                    JsonObject testStatus = testFields.getAsJsonObject("status");
+                                                    String testStatusName = testStatus != null && testStatus.get("name") != null 
+                                                            ? testStatus.get("name").getAsString() : "";
+                                                    row.addTrace("[TRACE] Test " + testKey + " status is: " + testStatusName);
+                                                    if ("Pass".equalsIgnoreCase(testStatusName) || 
+                                                        "Passed".equalsIgnoreCase(testStatusName) || 
+                                                        "Approved".equalsIgnoreCase(testStatusName)) {
+                                                        firstMatchedTest4 = "Y";
+                                                        break; // Found an approved test!
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
                             }
+                        } catch (Exception e) {
+                            row.addTrace("[TRACE] Error verifying XRAY test status: " + e.getMessage());
+                            firstMatchedTest4 = "N";
                         }
-                    } catch (Exception e) {
-                        row.addTrace("[TRACE] Error verifying XRAY test status: " + e.getMessage());
-                        row.test4 = "N";
-                    }
 
-                    try {
-                        JsonArray fixVersions = finalParentFields.getAsJsonArray("fixVersions");
-                        if (fixVersions != null && fixVersions.size() > 0) {
-                            JsonObject firstVersion = fixVersions.get(0).getAsJsonObject();
-                            JsonElement releasedEl = firstVersion.get("released");
-                            if (releasedEl != null && releasedEl.getAsBoolean()) {
-                                row.test5 = "Y";
+                        try {
+                            JsonArray fixVersions = finalParentFields.getAsJsonArray("fixVersions");
+                            if (fixVersions != null && fixVersions.size() > 0) {
+                                JsonObject firstVersion = fixVersions.get(0).getAsJsonObject();
+                                JsonElement releasedEl = firstVersion.get("released");
+                                if (releasedEl != null && releasedEl.getAsBoolean()) {
+                                    firstMatchedTest5 = "Y";
+                                } else {
+                                    firstMatchedTest5 = "N";
+                                }
                             } else {
-                                row.test5 = "N";
+                                firstMatchedTest5 = "N";
                             }
-                        } else {
-                            row.test5 = "N";
+                        } catch (Exception e) {
+                            firstMatchedTest5 = "N";
                         }
-                    } catch (Exception e) {
-                        row.test5 = "N";
                     }
-
-                    String epicSum = getEpicSummary(candidate, candTypeName);
-                    if (!matchedViaSummary.get() && matchedViaDesc.get()) {
-                        row.notes = "not found as a sub-task, " + epicSum;
-                    } else {
-                        row.notes = "Audit successful, " + epicSum;
-                    }
-                    return true;
                 }
             }
         }
+
+        if (overallMatched) {
+            row.jiraNum = firstMatchedJiraNum;
+            row.workType = firstMatchedWorkType;
+            row.test1 = firstMatchedTest1;
+            row.test2 = firstMatchedTest2;
+            row.test3 = firstMatchedTest3;
+            row.test4 = firstMatchedTest4;
+            row.test5 = firstMatchedTest5;
+
+            // Build the comma-separated matched Epic summaries
+            StringBuilder epicsNotesBuilder = new StringBuilder();
+            for (int i = 0; i < matchedEpicSummaries.size(); i++) {
+                epicsNotesBuilder.append(matchedEpicSummaries.get(i));
+                if (i < matchedEpicSummaries.size() - 1) {
+                    epicsNotesBuilder.append(", ");
+                }
+            }
+            String joinedEpics = epicsNotesBuilder.toString();
+
+            if (!overallMatchedViaSummary && overallMatchedViaDesc) {
+                row.notes = "not found as a sub-task, " + joinedEpics;
+            } else {
+                row.notes = "Audit successful, " + joinedEpics;
+            }
+            return true;
+        }
+
         AuditLogger.info("Cache Statistics: Hits=" + cacheHits.get() + ", Misses=" + cacheMisses.get());
         return false;
     }
