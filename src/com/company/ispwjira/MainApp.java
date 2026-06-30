@@ -18,6 +18,8 @@ import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import javafx.scene.input.Dragboard;
+import javafx.scene.input.TransferMode;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -260,6 +262,44 @@ public class MainApp extends Application {
         loadConfigValues();
 
         Scene scene = new Scene(root, 1150, 780);
+
+        // Support Drag & Drop of CSV files anywhere on the application window
+        scene.setOnDragOver(event -> {
+            if (event.getGestureSource() != scene && event.getDragboard().hasFiles()) {
+                boolean hasCsv = false;
+                for (File file : event.getDragboard().getFiles()) {
+                    if (file.getName().toLowerCase().endsWith(".csv")) {
+                        hasCsv = true;
+                        break;
+                    }
+                }
+                if (hasCsv) {
+                    event.acceptTransferModes(TransferMode.COPY_OR_MOVE);
+                }
+            }
+            event.consume();
+        });
+
+        scene.setOnDragDropped(event -> {
+            Dragboard db = event.getDragboard();
+            boolean success = false;
+            if (db.hasFiles()) {
+                File csvFile = null;
+                for (File file : db.getFiles()) {
+                    if (file.getName().toLowerCase().endsWith(".csv")) {
+                        csvFile = file;
+                        break;
+                    }
+                }
+                if (csvFile != null) {
+                    setInputFile(csvFile);
+                    success = true;
+                }
+            }
+            event.setDropCompleted(success);
+            event.consume();
+        });
+
         primaryStage.setScene(scene);
         primaryStage.show();
 
@@ -504,6 +544,27 @@ public class MainApp extends Application {
         }
     }
 
+    private void setInputFile(File file) {
+        if (file != null) {
+            selectedInputFile = file;
+            inputPathField.setText(file.getAbsolutePath());
+            AuditLogger.info("Input file selected: " + file.getName());
+            
+            // Auto-generate output file name in same parent directory
+            String parent = file.getParent();
+            String name = file.getName();
+            String base = name;
+            String ext = ".csv";
+            int lastDot = name.lastIndexOf('.');
+            if (lastDot > 0) {
+                base = name.substring(0, lastDot);
+                ext = name.substring(lastDot);
+            }
+            selectedOutputFile = new File(parent, base + "_filled" + ext);
+            AuditLogger.info("Auto-assigned output file: " + selectedOutputFile.getName());
+        }
+    }
+
     private void selectFile(boolean isInput) {
         FileChooser fileChooser = new FileChooser();
         fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("CSV Files (*.csv)", "*.csv"));
@@ -511,24 +572,7 @@ public class MainApp extends Application {
         if (isInput) {
             fileChooser.setTitle("Open Input ISPW CSV Export File");
             File file = fileChooser.showOpenDialog(null);
-            if (file != null) {
-                selectedInputFile = file;
-                inputPathField.setText(file.getAbsolutePath());
-                AuditLogger.info("Input file selected: " + file.getName());
-                
-                // Auto-generate output file name in same parent directory
-                String parent = file.getParent();
-                String name = file.getName();
-                String base = name;
-                String ext = ".csv";
-                int lastDot = name.lastIndexOf('.');
-                if (lastDot > 0) {
-                    base = name.substring(0, lastDot);
-                    ext = name.substring(lastDot);
-                }
-                selectedOutputFile = new File(parent, base + "_filled" + ext);
-                AuditLogger.info("Auto-assigned output file: " + selectedOutputFile.getName());
-            }
+            setInputFile(file);
         }
     }
 
