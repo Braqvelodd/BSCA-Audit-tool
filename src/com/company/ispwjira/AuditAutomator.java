@@ -812,7 +812,7 @@ public class AuditAutomator {
             if (!overallMatchedViaSummary && overallMatchedViaDesc) {
                 row.notes = "not found as a sub-task, " + joinedEpics;
             } else {
-                row.notes = "Audit successful, " + joinedEpics;
+                row.notes = joinedEpics;
             }
             return true;
         }
