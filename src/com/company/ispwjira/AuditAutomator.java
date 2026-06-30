@@ -115,7 +115,6 @@ public class AuditAutomator {
 
     private final String certAlias;
     private final String jiraUrl;
-    private final boolean devMode;
     private CloseableHttpClient httpClient;
     private final ExecutorService rowExecutorService = Executors.newFixedThreadPool(5);
     private final ExecutorService subtaskExecutorService = Executors.newFixedThreadPool(20);
@@ -123,18 +122,12 @@ public class AuditAutomator {
     // Stores the metadata header lines from the CSV (e.g. lines 1 to 37)
     public static final List<String> metadataHeaderLines = new ArrayList<>();
 
-    public AuditAutomator(String certAlias, String jiraUrl, boolean devMode) {
+    public AuditAutomator(String certAlias, String jiraUrl) {
         this.certAlias = certAlias;
         this.jiraUrl = jiraUrl;
-        this.devMode = devMode;
     }
 
     public void initHttpClient() throws Exception {
-        if (devMode) {
-            AuditLogger.info("Initializing HTTP Client in DEV (Mock Interceptor) Mode.");
-            this.httpClient = HttpClients.createDefault();
-            return;
-        }
 
         SSLContext sslContext;
         SSLConnectionSocketFactory sslSocketFactory;
@@ -694,17 +687,6 @@ public class AuditAutomator {
     }
 
     private String executeHttpGetWithRetry(String url) throws Exception {
-        if (devMode) {
-            MockJiraServer.MockResponse mockResp = MockJiraServer.handleRequest(url);
-            if (mockResp.statusCode == 429) {
-                String retryAfterStr = mockResp.headers.get("Retry-After");
-                int retrySec = retryAfterStr != null ? Integer.parseInt(retryAfterStr) : 2;
-                AuditLogger.warn("Received HTTP 429 Rate Limit (MOCK). Retrying in " + retrySec + " seconds...");
-                Thread.sleep(retrySec * 1000L);
-                mockResp = MockJiraServer.handleRequest(url);
-            }
-            return mockResp.body;
-        }
 
         int retries = 0;
         int maxRetries = 3;

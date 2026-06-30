@@ -189,7 +189,6 @@ public class MainApp extends Application {
 
     private TextField jiraUrlField;
     private ComboBox<CertificateManager.CertInfo> certComboBox;
-    private CheckBox devModeCheckbox;
     private TextField inputPathField;
     private TextArea logArea;
     private Button runButton;
@@ -325,15 +324,6 @@ public class MainApp extends Application {
         grid.add(jiraUrlLabel, 0, 0);
         grid.add(jiraUrlField, 1, 0);
 
-        // Dev SSL / Mock Checkbox
-        devModeCheckbox = new CheckBox("Dev/Mock Mode (Bypass SSL Validation & CAC Requirement)");
-        devModeCheckbox.setFont(Font.font("Segoe UI", 12));
-        grid.add(devModeCheckbox, 2, 0);
-        devModeCheckbox.selectedProperty().addListener((obs, oldVal, newVal) -> {
-            ConfigManager.setDevMode(newVal);
-            ConfigManager.save();
-            refreshCertificateList();
-        });
 
         // Row 1: CAC Certificate
         Label certLabel = new Label("CAC Cert Select:");
@@ -525,7 +515,6 @@ public class MainApp extends Application {
 
     private void loadConfigValues() {
         jiraUrlField.setText(ConfigManager.getJiraUrl());
-        devModeCheckbox.setSelected(ConfigManager.isDevMode());
         refreshCertificateList();
 
         String lastCert = ConfigManager.getLastSelectedCert();
@@ -583,7 +572,6 @@ public class MainApp extends Application {
     private void handleRunAudit() {
         String jiraUrl = jiraUrlField.getText().trim();
         CertificateManager.CertInfo selectedCert = certComboBox.getValue();
-        boolean devMode = devModeCheckbox.isSelected();
 
         if (jiraUrl.isEmpty()) {
             showAlert("Configuration Error", "Please provide a valid Jira Server URL.");
@@ -597,8 +585,8 @@ public class MainApp extends Application {
             showAlert("Output Error", "Please select a valid output audit CSV destination file.");
             return;
         }
-        if (!devMode && selectedCert == null) {
-            showAlert("CAC Error", "A valid DoD CAC client certificate must be selected when not in Dev/Mock mode.");
+        if (selectedCert == null) {
+            showAlert("CAC Error", "A valid DoD CAC client certificate must be selected.");
             return;
         }
 
@@ -621,7 +609,7 @@ public class MainApp extends Application {
                 AuditLogger.info("Parsing 19-column input ISPW CSV...");
                 List<AuditAutomator.AuditRow> rows = AuditAutomator.parseCsvReport(selectedInputFile);
                 
-                AuditAutomator automator = new AuditAutomator(alias, jiraUrl, devMode);
+                AuditAutomator automator = new AuditAutomator(alias, jiraUrl);
                 try {
                     automator.initHttpClient();
                     automator.runAudit(rows);

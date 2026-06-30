@@ -31,11 +31,7 @@ public class CertificateManager {
     public static List<CertInfo> getAvailableCertificates() {
         List<CertInfo> certs = new ArrayList<>();
         
-        // Always include mock certificates if in Dev Mode for testing purposes
-        if (ConfigManager.isDevMode()) {
-            certs.add(new CertInfo("MOCK-CAC-DEV-001", "CN=JOHN.DOE.1234567890, OU=CONTRACTOR, OU=PKI, OU=DoD, O=U.S. Government, C=US", true));
-            certs.add(new CertInfo("MOCK-CAC-DEV-002", "CN=JANE.SMITH.0987654321, OU=USAF, OU=PKI, OU=DoD, O=U.S. Government, C=US", true));
-        }
+
 
         try {
             KeyStore keyStore = KeyStore.getInstance("Windows-MY");
