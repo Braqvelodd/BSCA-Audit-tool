@@ -579,8 +579,6 @@ public class AuditAutomator {
             if (!inspectionTasks.isEmpty()) {
                 final String searchString = (row.type.trim() + " " + row.name.trim()).toLowerCase();
                 final AtomicBoolean test3Passed = new AtomicBoolean(false);
-                final AtomicBoolean qaPassed = new AtomicBoolean(false);
-                final AtomicBoolean qaTaskFound = new AtomicBoolean(false);
                 final AtomicBoolean matched = new AtomicBoolean(false);
 
                 final StringBuilder matchedParentKey = new StringBuilder();
@@ -624,19 +622,6 @@ public class AuditAutomator {
                                             matchedParentPayload.add(task.parentPayload);
                                             row.addTrace("[TRACE] MATCH FOUND on sub-task " + task.subtaskKey + "! Setting target parent key to: " + task.parentKey);
                                         }
-                                    }
-                                }
-
-                                boolean isQaTask = summary.toLowerCase().contains("qa") || summary.toLowerCase().contains("test");
-                                if (isQaTask) {
-                                    qaTaskFound.set(true);
-                                    JsonObject subStatus = subFields.getAsJsonObject("status");
-                                    String subStatusName = subStatus != null ? subStatus.get("name").getAsString() : "";
-                                    row.addTrace("[TRACE] Found QA task " + task.subtaskKey + " with status: " + subStatusName);
-                                    if ("Passed".equalsIgnoreCase(subStatusName) ||
-                                        "Accepted".equalsIgnoreCase(subStatusName) ||
-                                        "Done".equalsIgnoreCase(subStatusName)) {
-                                        qaPassed.set(true);
                                     }
                                 }
                             } catch (Exception ex) {
@@ -695,9 +680,53 @@ public class AuditAutomator {
 
                     row.test3 = "Y";
 
-                    if (qaTaskFound.get()) {
-                        row.test4 = qaPassed.get() ? "Y" : "N";
-                    } else {
+                    row.test4 = "N";
+                    try {
+                        JsonArray issuelinks = finalParentFields.getAsJsonArray("issuelinks");
+                        if (issuelinks != null) {
+                            for (JsonElement linkEl : issuelinks) {
+                                JsonObject link = linkEl.getAsJsonObject();
+                                JsonObject linkType = link.getAsJsonObject("type");
+                                String linkTypeName = linkType != null && linkType.get("name") != null 
+                                        ? linkType.get("name").getAsString() : "";
+                                
+                                if ("tested by".equalsIgnoreCase(linkTypeName)) {
+                                    JsonObject targetIssue = null;
+                                    if (link.has("inwardIssue")) {
+                                        targetIssue = link.getAsJsonObject("inwardIssue");
+                                    } else if (link.has("outwardIssue")) {
+                                        targetIssue = link.getAsJsonObject("outwardIssue");
+                                    }
+                                    
+                                    if (targetIssue != null) {
+                                        String testKey = targetIssue.get("key").getAsString();
+                                        row.addTrace("[TRACE] Found XRAY Test link: " + testKey + " under parent " + finalParentKey);
+                                        
+                                        // Fetch the Test issue's full details to inspect status
+                                        String testUrl = jiraUrl + "/rest/api/2/issue/" + testKey;
+                                        String testJson = executeHttpGetWithRetry(testUrl);
+                                        if (testJson != null) {
+                                            JsonObject testPayload = JsonParser.parseString(testJson).getAsJsonObject();
+                                            JsonObject testFields = testPayload.getAsJsonObject("fields");
+                                            if (testFields != null) {
+                                                JsonObject testStatus = testFields.getAsJsonObject("status");
+                                                String testStatusName = testStatus != null && testStatus.get("name") != null 
+                                                        ? testStatus.get("name").getAsString() : "";
+                                                row.addTrace("[TRACE] Test " + testKey + " status is: " + testStatusName);
+                                                if ("Pass".equalsIgnoreCase(testStatusName) || 
+                                                    "Passed".equalsIgnoreCase(testStatusName) || 
+                                                    "Approved".equalsIgnoreCase(testStatusName)) {
+                                                    row.test4 = "Y";
+                                                    break; // Found an approved test!
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        row.addTrace("[TRACE] Error verifying XRAY test status: " + e.getMessage());
                         row.test4 = "N";
                     }
 
