@@ -582,7 +582,7 @@ public class AuditAutomator {
                     subtaskFutures.add(subtaskExecutorService.submit(new Runnable() {
                         @Override
                         public void run() {
-                            if (matched.get() && test3Passed.get() && qaPassed.get()) {
+                            if (matched.get()) {
                                 return;
                             }
 
