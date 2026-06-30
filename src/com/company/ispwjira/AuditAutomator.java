@@ -124,6 +124,11 @@ public class AuditAutomator {
     private CloseableHttpClient httpClient;
     private final ExecutorService rowExecutorService = Executors.newFixedThreadPool(5);
     private final ExecutorService subtaskExecutorService = Executors.newFixedThreadPool(20);
+
+    // Thread-safe in-memory cache for JIRA GET requests
+    private final Map<String, String> getCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicInteger cacheHits = new java.util.concurrent.atomic.AtomicInteger(0);
+    private final java.util.concurrent.atomic.AtomicInteger cacheMisses = new java.util.concurrent.atomic.AtomicInteger(0);
     
     // Stores the metadata header lines from the CSV (e.g. lines 1 to 37)
     public static final List<String> metadataHeaderLines = new ArrayList<>();
@@ -264,6 +269,10 @@ public class AuditAutomator {
             }
         }
         AuditLogger.info("Audit run completed.");
+        int hits = cacheHits.get();
+        int misses = cacheMisses.get();
+        double ratio = (hits + misses) > 0 ? ((double) hits / (hits + misses)) * 100.0 : 0.0;
+        AuditLogger.info(String.format("JIRA HTTP Cache Stats - Hits: %d, Misses: %d, Hit Ratio: %.1f%%", hits, misses, ratio));
     }
 
     private void auditSingleRow(final AuditRow row) throws Exception {
@@ -714,10 +723,16 @@ public class AuditAutomator {
                 }
             }
         }
+        AuditLogger.info("Cache Statistics: Hits=" + cacheHits.get() + ", Misses=" + cacheMisses.get());
         return false;
     }
 
     private String executeHttpGetWithRetry(String url) throws Exception {
+        if (getCache.containsKey(url)) {
+            cacheHits.incrementAndGet();
+            return getCache.get(url);
+        }
+        cacheMisses.incrementAndGet();
 
         int retries = 0;
         int maxRetries = 3;
@@ -729,7 +744,11 @@ public class AuditAutomator {
                 int statusCode = response.getStatusLine().getStatusCode();
                 if (statusCode == 200) {
                     HttpEntity entity = response.getEntity();
-                    return entity != null ? EntityUtils.toString(entity) : null;
+                    String result = entity != null ? EntityUtils.toString(entity) : null;
+                    if (result != null) {
+                        getCache.put(url, result);
+                    }
+                    return result;
                 } else if (statusCode == 429) {
                     Header retryHeader = response.getFirstHeader("Retry-After");
                     int waitSeconds = 2;
