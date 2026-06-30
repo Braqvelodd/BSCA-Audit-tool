@@ -247,12 +247,12 @@ public class AuditAutomator {
                     } finally {
                         if (traceLoggingEnabled) {
                             synchronized (AuditLogger.class) {
-                                AuditLogger.info("\n--------------------------------------------------");
-                                AuditLogger.info("TRACE LOGS FOR ROW " + (index + 1) + " (Release ID: " + row.releaseId + ", CI: " + row.type + " " + row.name + "):");
+                                AuditLogger.infoFileOnly("\n--------------------------------------------------");
+                                AuditLogger.infoFileOnly("TRACE LOGS FOR ROW " + (index + 1) + " (Release ID: " + row.releaseId + ", CI: " + row.type + " " + row.name + "):");
                                 for (String log : row.traceLogs) {
-                                    AuditLogger.info(log);
+                                    AuditLogger.infoFileOnly(log);
                                 }
-                                AuditLogger.info("--------------------------------------------------\n");
+                                AuditLogger.infoFileOnly("--------------------------------------------------\n");
                             }
                         }
                     }

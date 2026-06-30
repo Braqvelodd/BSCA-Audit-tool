@@ -640,6 +640,7 @@ public class MainApp extends Application {
         Task<List<AuditAutomator.AuditRow>> auditTask = new Task<List<AuditAutomator.AuditRow>>() {
             @Override
             protected List<AuditAutomator.AuditRow> call() throws Exception {
+                AuditLogger.resetLogFile();
                 AuditLogger.info("Parsing 19-column input ISPW CSV...");
                 List<AuditAutomator.AuditRow> rows = AuditAutomator.parseCsvReport(selectedInputFile);
                 

@@ -25,6 +25,27 @@ public class AuditLogger {
         INFO, WARN, ERROR, FATAL
     }
 
+    public static synchronized void resetLogFile() {
+        try (FileWriter fw = new FileWriter(LOG_FILE, false)) {
+            // Open with append=false to clear/truncate the file
+        } catch (IOException e) {
+            System.err.println("Failed to clear log file " + LOG_FILE + ": " + e.getMessage());
+        }
+    }
+
+    public static synchronized void logFileOnly(Level level, String message) {
+        String timestamp = DATE_FORMAT.format(new Date());
+        String logEntry = String.format("[%s] [%s] %s", timestamp, level, message);
+
+        try (FileWriter fw = new FileWriter(LOG_FILE, true);
+             BufferedWriter bw = new BufferedWriter(fw);
+             PrintWriter out = new PrintWriter(bw)) {
+            out.println(logEntry);
+        } catch (IOException e) {
+            System.err.println("Failed to write to " + LOG_FILE + ": " + e.getMessage());
+        }
+    }
+
     public static synchronized void log(Level level, String message) {
         String timestamp = DATE_FORMAT.format(new Date());
         String logEntry = String.format("[%s] [%s] %s", timestamp, level, message);
@@ -53,6 +74,10 @@ public class AuditLogger {
 
     public static void info(String message) {
         log(Level.INFO, message);
+    }
+
+    public static void infoFileOnly(String message) {
+        logFileOnly(Level.INFO, message);
     }
 
     public static void warn(String message) {
