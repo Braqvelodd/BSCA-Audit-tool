@@ -5,3 +5,4 @@ dist/
 config.ini
 compileandbuild.bat
 build.bat
+run.bat
