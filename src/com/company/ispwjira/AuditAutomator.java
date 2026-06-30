@@ -580,6 +580,8 @@ public class AuditAutomator {
                 final String searchString = (row.type.trim() + " " + row.name.trim()).toLowerCase();
                 final AtomicBoolean test3Passed = new AtomicBoolean(false);
                 final AtomicBoolean matched = new AtomicBoolean(false);
+                final AtomicBoolean matchedViaSummary = new AtomicBoolean(false);
+                final AtomicBoolean matchedViaDesc = new AtomicBoolean(false);
 
                 final StringBuilder matchedParentKey = new StringBuilder();
                 final List<JsonObject> matchedParentPayload = new ArrayList<>();
@@ -589,7 +591,7 @@ public class AuditAutomator {
                     subtaskFutures.add(subtaskExecutorService.submit(new Runnable() {
                         @Override
                         public void run() {
-                            if (matched.get()) {
+                            if (matched.get() && matchedViaSummary.get()) {
                                 return;
                             }
 
@@ -614,13 +616,24 @@ public class AuditAutomator {
                                 if (matchSummary || matchDesc) {
                                     test3Passed.set(true);
                                     synchronized (matched) {
-                                        if (!matched.get()) {
+                                        if (matchSummary) {
                                             matched.set(true);
+                                            matchedViaSummary.set(true);
                                             matchedParentKey.setLength(0);
                                             matchedParentKey.append(task.parentKey);
                                             matchedParentPayload.clear();
                                             matchedParentPayload.add(task.parentPayload);
-                                            row.addTrace("[TRACE] MATCH FOUND on sub-task " + task.subtaskKey + "! Setting target parent key to: " + task.parentKey);
+                                            row.addTrace("[TRACE] SUMMARY MATCH FOUND on sub-task " + task.subtaskKey + "! Setting target parent key to: " + task.parentKey);
+                                        } else if (matchDesc) {
+                                            matchedViaDesc.set(true);
+                                            if (!matched.get()) {
+                                                matched.set(true);
+                                                matchedParentKey.setLength(0);
+                                                matchedParentKey.append(task.parentKey);
+                                                matchedParentPayload.clear();
+                                                matchedParentPayload.add(task.parentPayload);
+                                                row.addTrace("[TRACE] DESCRIPTION MATCH FOUND on sub-task " + task.subtaskKey + "! Setting target parent key to: " + task.parentKey);
+                                            }
                                         }
                                     }
                                 }
@@ -747,7 +760,12 @@ public class AuditAutomator {
                         row.test5 = "N";
                     }
 
-                    row.notes = "Audit successful.";
+                    if (!matchedViaSummary.get() && matchedViaDesc.get()) {
+                        String epicSum = getEpicSummary(candidate, candTypeName);
+                        row.notes = "not found as a sub-task. Epic Summary: " + epicSum;
+                    } else {
+                        row.notes = "Audit successful.";
+                    }
                     return true;
                 }
             }
@@ -920,6 +938,49 @@ public class AuditAutomator {
             this.subtaskKey = subtaskKey;
             this.parentKey = parentKey;
             this.parentPayload = parentPayload;
+        }
+    }
+
+    private static String getEpicSummary(JsonObject candidate, String candTypeName) {
+        try {
+            JsonObject candFields = candidate.getAsJsonObject("fields");
+            if (candFields == null) return "";
+
+            if ("Epic".equalsIgnoreCase(candTypeName)) {
+                return candFields.has("summary") && !candFields.get("summary").isJsonNull() 
+                        ? candFields.get("summary").getAsString() : "";
+            }
+
+            // Check parent field
+            if (candFields.has("parent")) {
+                JsonObject parentObj = candFields.getAsJsonObject("parent");
+                JsonObject parentFields = parentObj.getAsJsonObject("fields");
+                if (parentFields != null) {
+                    JsonObject parentTypeObj = parentFields.getAsJsonObject("issuetype");
+                    String parentTypeName = parentTypeObj != null ? parentTypeObj.get("name").getAsString() : "";
+                    if ("Epic".equalsIgnoreCase(parentTypeName)) {
+                        return parentFields.has("summary") && !parentFields.get("summary").isJsonNull() 
+                                ? parentFields.get("summary").getAsString() : "";
+                    }
+                }
+            }
+
+            // Check epic field
+            if (candFields.has("epic")) {
+                JsonObject epicObj = candFields.getAsJsonObject("epic");
+                JsonObject epicFields = epicObj.getAsJsonObject("fields");
+                if (epicFields != null && epicFields.has("summary") && !epicFields.get("summary").isJsonNull()) {
+                    return epicFields.get("summary").getAsString();
+                } else if (epicObj.has("summary") && !epicObj.get("summary").isJsonNull()) {
+                    return epicObj.get("summary").getAsString();
+                }
+            }
+
+            // Fallback: candidate's own summary
+            return candFields.has("summary") && !candFields.get("summary").isJsonNull() 
+                    ? candFields.get("summary").getAsString() : "";
+        } catch (Exception e) {
+            return "";
         }
     }
 }
