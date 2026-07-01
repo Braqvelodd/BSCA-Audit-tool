@@ -296,6 +296,7 @@ public class AuditAutomator {
         }
 
         row.addTrace("[TRACE] Auditing Release ID '" + row.releaseId + "', CI Type: '" + row.type + "', CI Name: '" + row.name + "'");
+        final List<String> descMatchedKeys = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         boolean isSrRelease = row.releaseId.trim().toUpperCase().startsWith("SR");
         boolean taskLinkSuccess = false;
@@ -336,6 +337,9 @@ public class AuditAutomator {
                             row.addTrace("[TRACE] Path 1: Checking sub-task " + subtaskKey + " description (length: " + descLower.length() + "). Match status: " + descMatched);
 
                             if (descMatched) {
+                                if (!descMatchedKeys.contains(subtaskKey)) {
+                                    descMatchedKeys.add(subtaskKey);
+                                }
                                 JsonObject parentObj = fieldsObj.getAsJsonObject("parent");
                                 if (parentObj != null) {
                                     final String parentTaskKey = parentObj.get("key").getAsString();
@@ -441,7 +445,7 @@ public class AuditAutomator {
                                                         JsonArray epicsList = epicsResponse.getAsJsonArray("issues");
                                                         if (epicsList != null && epicsList.size() > 0) {
                                                             row.addTrace("[TRACE] Path 1: Inspecting sub-tasks under linked candidate Epics...");
-                                                            taskLinkSuccess = performCandidateInspection(row, epicsList);
+                                                            taskLinkSuccess = performCandidateInspection(row, epicsList, descMatchedKeys);
                                                             if (taskLinkSuccess) {
                                                                 return; // Finished auditing row!
                                                             }
@@ -469,6 +473,9 @@ public class AuditAutomator {
             row.addTrace("[TRACE] Release ID '" + row.releaseId + "' is not an SR* release. Skipping Path 1 (Task-Link)...");
         }
 
+        // Clear description match keys from Path 1 if we failed or skipped to prevent leaking into Path 2
+        descMatchedKeys.clear();
+
         // 2. Direct Comment Path (Fallback Path)
         row.addTrace("[TRACE] Path 2: Querying JIRA comments for Release ID '" + row.releaseId + "'...");
         String fallbackJql = "project = TFS AND comment ~ \"" + row.releaseId + "\"";
@@ -488,7 +495,7 @@ public class AuditAutomator {
         
         if (fbCandidates != null && fbCandidates.size() > 0) {
             row.addTrace("[TRACE] Path 2: Inspecting sub-tasks under comment-linked candidate issues...");
-            boolean fallbackSuccess = performCandidateInspection(row, fbCandidates);
+            boolean fallbackSuccess = performCandidateInspection(row, fbCandidates, descMatchedKeys);
             if (fallbackSuccess) {
                 return; // Finished auditing row!
             }
@@ -500,7 +507,7 @@ public class AuditAutomator {
         row.addTrace("[TRACE] FAILED: Release ID '" + row.releaseId + "' audit complete. No matching sub-task found on either path.");
     }
 
-    private boolean performCandidateInspection(final AuditRow row, JsonArray candidates) throws Exception {
+    private boolean performCandidateInspection(final AuditRow row, JsonArray candidates, List<String> descMatchedKeys) throws Exception {
         List<String> matchedEpicSummaries = new ArrayList<>();
         boolean overallMatched = false;
         boolean overallMatchedViaSummary = false;
@@ -657,6 +664,11 @@ public class AuditAutomator {
 
                                 if (matchSummary || matchDesc) {
                                     test3Passed.set(true);
+                                    if (matchDesc) {
+                                        if (!descMatchedKeys.contains(subtaskKey)) {
+                                            descMatchedKeys.add(subtaskKey);
+                                        }
+                                    }
                                     if (matchSummary) {
                                         matched.set(true);
                                         matchedViaSummary.set(true);
@@ -830,10 +842,19 @@ public class AuditAutomator {
             }
             String joinedEpics = epicsNotesBuilder.toString();
 
-            if (!overallMatchedViaSummary && overallMatchedViaDesc) {
-                row.notes = joinedEpics + ", not found as a sub-task";
+            if (!descMatchedKeys.isEmpty()) {
+                String descKeysStr = String.join(", ", descMatchedKeys);
+                if (joinedEpics.isEmpty()) {
+                    row.notes = "Found in description of " + descKeysStr;
+                } else {
+                    row.notes = joinedEpics + " (Found in description of " + descKeysStr + ")";
+                }
             } else {
-                row.notes = joinedEpics;
+                if (!overallMatchedViaSummary && overallMatchedViaDesc) {
+                    row.notes = joinedEpics + ", not found as a sub-task";
+                } else {
+                    row.notes = joinedEpics;
+                }
             }
             return true;
         }
