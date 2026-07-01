@@ -123,7 +123,7 @@ public class AuditAutomator {
     private final boolean traceLoggingEnabled;
     private CloseableHttpClient httpClient;
     private final ExecutorService rowExecutorService = Executors.newFixedThreadPool(5);
-    private final ExecutorService subtaskExecutorService = Executors.newFixedThreadPool(20);
+    private final ExecutorService subtaskExecutorService = Executors.newFixedThreadPool(10);
 
     // Thread-safe in-memory cache for JIRA GET requests
     private final Map<String, String> getCache = new java.util.concurrent.ConcurrentHashMap<>();
