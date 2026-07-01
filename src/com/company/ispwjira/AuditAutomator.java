@@ -227,7 +227,13 @@ public class AuditAutomator {
 
     public void runAudit(List<AuditRow> rows) {
         long startTime = System.currentTimeMillis();
-        AuditLogger.info("Starting audit run on " + rows.size() + " rows.");
+        int selectedCount = 0;
+        for (AuditRow row : rows) {
+            if ("Y".equalsIgnoreCase(row.selected)) {
+                selectedCount++;
+            }
+        }
+        AuditLogger.info("Starting audit run on " + selectedCount + " selected rows.");
         List<Future<?>> rowFutures = new ArrayList<>();
 
         for (int i = 0; i < rows.size(); i++) {
