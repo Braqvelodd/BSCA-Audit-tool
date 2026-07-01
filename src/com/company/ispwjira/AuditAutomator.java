@@ -221,6 +221,8 @@ public class AuditAutomator {
         }
         AuditLogger.info("Starting audit run on " + selectedCount + " selected rows.");
         List<Future<?>> rowFutures = new ArrayList<>();
+        final int finalSelectedCount = selectedCount;
+        final java.util.concurrent.atomic.AtomicInteger processedCount = new java.util.concurrent.atomic.AtomicInteger(0);
 
         for (int i = 0; i < rows.size(); i++) {
             final AuditRow row = rows.get(i);
@@ -234,7 +236,8 @@ public class AuditAutomator {
             rowFutures.add(rowExecutorService.submit(new Runnable() {
                 @Override
                 public void run() {
-                    AuditLogger.info("Auditing row " + (index + 1) + "/" + rows.size() + " - Release ID: " + row.releaseId);
+                    int currentNumber = processedCount.incrementAndGet();
+                    AuditLogger.info("Auditing row " + currentNumber + "/" + finalSelectedCount + " (CSV Row " + (index + 1) + ") - Release ID: " + row.releaseId);
                     try {
                         row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
                         if (row.test6 == null || row.test6.trim().isEmpty()) {
