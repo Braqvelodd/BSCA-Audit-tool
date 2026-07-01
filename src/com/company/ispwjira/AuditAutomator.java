@@ -218,6 +218,7 @@ public class AuditAutomator {
     }
 
     public void runAudit(List<AuditRow> rows) {
+        long startTime = System.currentTimeMillis();
         AuditLogger.info("Starting audit run on " + rows.size() + " rows.");
         List<Future<?>> rowFutures = new ArrayList<>();
 
@@ -268,7 +269,9 @@ public class AuditAutomator {
                 AuditLogger.error("Error waiting for row audit task: " + e.getMessage());
             }
         }
-        AuditLogger.info("Audit run completed.");
+        long endTime = System.currentTimeMillis();
+        double durationSeconds = (endTime - startTime) / 1000.0;
+        AuditLogger.info(String.format("Audit run completed in %.2f seconds.", durationSeconds));
         int hits = cacheHits.get();
         int misses = cacheMisses.get();
         double ratio = (hits + misses) > 0 ? ((double) hits / (hits + misses)) * 100.0 : 0.0;
