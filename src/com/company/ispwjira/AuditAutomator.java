@@ -139,6 +139,14 @@ public class AuditAutomator {
         this.traceLoggingEnabled = traceLoggingEnabled;
     }
 
+    public CloseableHttpClient getHttpClient() {
+        return httpClient;
+    }
+
+    public String getJiraUrl() {
+        return jiraUrl;
+    }
+
     public void initHttpClient() throws Exception {
 
         SSLContext sslContext;
