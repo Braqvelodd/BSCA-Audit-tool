@@ -317,9 +317,8 @@ public class AuditAutomator {
                                     ? fieldsObj.get("description").getAsString() : "";
                             String descLower = description.toLowerCase();
 
-                            // Match logic: Combined type+name OR both type and name separately
-                            boolean descMatched = descLower.contains(combinedNorm) || 
-                                                  (descLower.contains(typeNorm) && descLower.contains(nameNorm));
+                            // Match logic: Robust helper
+                            boolean descMatched = isCiInDescription(description, row.type, row.name);
 
                             row.addTrace("[TRACE] Path 1: Checking sub-task " + subtaskKey + " description (length: " + descLower.length() + "). Match status: " + descMatched);
 
@@ -622,7 +621,7 @@ public class AuditAutomator {
                                         ? subFields.get("description").getAsString() : "";
 
                                 boolean matchSummary = summary.toLowerCase().trim().startsWith(searchString);
-                                boolean matchDesc = description.toLowerCase().contains(searchString);
+                                boolean matchDesc = isCiInDescription(description, row.type, row.name);
 
                                 row.addTrace("[TRACE] Comparing sub-task " + task.subtaskKey + " (parent: " + task.parentKey + "): Summary='" + summary + "' StartsWith='" + searchString + "'? " + matchSummary + "; Description Contains='" + searchString + "'? " + matchDesc);
 
@@ -1046,5 +1045,36 @@ public class AuditAutomator {
         } catch (Exception e) {
             return "";
         }
+    }
+
+    private static boolean isCiInDescription(String description, String type, String name) {
+        if (description == null || description.isEmpty()) return false;
+
+        String descLower = description.toLowerCase();
+        String typeNorm = type.trim().toLowerCase();
+        String nameNorm = name.trim().toLowerCase();
+        String searchString = typeNorm + " " + nameNorm;
+
+        // 1. Direct contiguous match
+        if (descLower.contains(searchString)) {
+            return true;
+        }
+
+        // 2. Whitespace normalized match (handles multiple spaces, newlines, tabs)
+        String normalizedDesc = descLower.replaceAll("\\s+", " ");
+        if (normalizedDesc.contains(searchString)) {
+            return true;
+        }
+
+        // 3. Line-by-line check: does any single line contain both type and name?
+        // (Prevents false positives from matching different lines, but allows flexible formats on the same line)
+        String[] lines = descLower.split("\\r?\\n");
+        for (String line : lines) {
+            if (line.contains(typeNorm) && line.contains(nameNorm)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
