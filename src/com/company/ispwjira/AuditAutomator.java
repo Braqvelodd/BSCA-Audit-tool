@@ -657,27 +657,29 @@ public class AuditAutomator {
 
                                 String summaryNorm = summary.toLowerCase().trim().replaceAll("\\s+", " ");
                                 boolean matchSummary = summaryNorm.startsWith(searchString);
-                                boolean matchDesc = isCiInDescription(description, row.type, row.name);
+                                boolean matchDesc = false;
+                                if (!matchSummary && !matchedViaSummary.get()) {
+                                    matchDesc = isCiInDescription(description, row.type, row.name);
+                                }
 
                                 SubtaskInspectionTask originalTask = taskMap.get(subtaskKey);
                                 row.addTrace("[TRACE] Comparing sub-task " + subtaskKey + " (parent: " + originalTask.parentKey + "): Summary='" + summary + "' StartsWith='" + searchString + "'? " + matchSummary + "; Description Contains='" + searchString + "'? " + matchDesc);
 
                                 if (matchSummary || matchDesc) {
                                     test3Passed.set(true);
-                                    if (matchDesc) {
-                                        if (!descMatchedKeys.contains(subtaskKey)) {
-                                            descMatchedKeys.add(subtaskKey);
-                                        }
-                                    }
                                     if (matchSummary) {
                                         matched.set(true);
                                         matchedViaSummary.set(true);
+                                        descMatchedKeys.clear(); // discard any description matches since summary match is found!
                                         matchedParentKey.setLength(0);
                                         matchedParentKey.append(originalTask.parentKey);
                                         matchedParentPayload.clear();
                                         matchedParentPayload.add(originalTask.parentPayload);
                                         row.addTrace("[TRACE] SUMMARY MATCH FOUND on sub-task " + subtaskKey + "! Setting target parent key to: " + originalTask.parentKey);
-                                    } else if (matchDesc) {
+                                    } else if (matchDesc && !matchedViaSummary.get()) {
+                                        if (!descMatchedKeys.contains(subtaskKey)) {
+                                            descMatchedKeys.add(subtaskKey);
+                                        }
                                         matchedViaDesc.set(true);
                                         if (!matched.get()) {
                                             matched.set(true);
