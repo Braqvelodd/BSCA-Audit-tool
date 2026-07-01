@@ -208,7 +208,6 @@ public class MainApp extends Application {
     private TextArea logArea;
     private Button runButton;
     private Button exportButton;
-    private Button benchmarkButton;
     private ProgressBar progressBar;
 
     private File selectedInputFile;
@@ -503,13 +502,7 @@ public class MainApp extends Application {
         exportButton.setOnAction(e -> handleExportCsv());
         exportButton.setDisable(true);
 
-        benchmarkButton = new Button("Run Query Benchmark");
-        benchmarkButton.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
-        benchmarkButton.setStyle("-fx-background-color: #7c3aed; -fx-text-fill: white; -fx-padding: 8px 16px; -fx-background-radius: 4px;");
-        benchmarkButton.setOnAction(e -> handleRunBenchmark());
-        benchmarkButton.setDisable(true);
-
-        HBox btnHBox = new HBox(12, runButton, exportButton, benchmarkButton);
+        HBox btnHBox = new HBox(12, runButton, exportButton);
         btnHBox.setAlignment(Pos.CENTER_RIGHT);
 
         card.getChildren().addAll(tableTitle, tableView, btnHBox);
@@ -610,7 +603,6 @@ public class MainApp extends Application {
             selectedOutputFile = new File(parent, base + "_filled" + ext);
             AuditLogger.info("Auto-assigned output file: " + selectedOutputFile.getName());
             runButton.setDisable(false);
-            benchmarkButton.setDisable(false);
         }
     }
 
@@ -656,7 +648,6 @@ public class MainApp extends Application {
 
         runButton.setDisable(true);
         exportButton.setDisable(true);
-        benchmarkButton.setDisable(true);
         progressBar.setVisible(true);
         progressBar.setProgress(-1);
 
@@ -691,7 +682,6 @@ public class MainApp extends Application {
                 
                 runButton.setDisable(false);
                 exportButton.setDisable(false);
-                benchmarkButton.setDisable(false);
                 progressBar.setVisible(false);
                 AuditLogger.info("Audit verification process finished. Results populated in grid.");
             } catch (Exception ex) {
@@ -702,7 +692,6 @@ public class MainApp extends Application {
 
         auditTask.setOnFailed(e -> {
             runButton.setDisable(false);
-            benchmarkButton.setDisable(false);
             progressBar.setVisible(false);
             Throwable err = auditTask.getException();
             AuditLogger.error("Audit run failed: " + err.getMessage());
@@ -750,215 +739,4 @@ public class MainApp extends Application {
         alert.showAndWait();
     }
 
-    private void handleRunBenchmark() {
-        String jiraUrl = jiraUrlField.getText().trim();
-        CertificateManager.CertInfo selectedCert = certComboBox.getValue();
-        boolean traceLogging = traceLoggingCheckbox.isSelected();
-
-        if (jiraUrl.isEmpty()) {
-            showAlert("Configuration Error", "Please provide a valid Jira Server URL.");
-            return;
-        }
-        if (selectedInputFile == null || !selectedInputFile.exists()) {
-            showAlert("Input Error", "Please select a valid input ISPW CSV file.");
-            return;
-        }
-        if (selectedCert == null) {
-            showAlert("CAC Error", "A valid DoD CAC client certificate must be selected.");
-            return;
-        }
-
-        ConfigManager.setJiraUrl(jiraUrl);
-        ConfigManager.setTraceLoggingEnabled(traceLogging);
-        ConfigManager.setLastSelectedCert(selectedCert.getAlias());
-        ConfigManager.save();
-
-        runButton.setDisable(true);
-        exportButton.setDisable(true);
-        benchmarkButton.setDisable(true);
-        progressBar.setVisible(true);
-        progressBar.setProgress(-1);
-
-        String alias = selectedCert.getAlias();
-
-        Task<List<AuditAutomator.AuditRow>> benchmarkTask = new Task<List<AuditAutomator.AuditRow>>() {
-            @Override
-            protected List<AuditAutomator.AuditRow> call() throws Exception {
-                AuditLogger.info("Parsing input CSV for benchmark runs...");
-                List<AuditAutomator.AuditRow> rowsA = AuditAutomator.parseCsvReport(selectedInputFile);
-                List<AuditAutomator.AuditRow> rowsB = AuditAutomator.parseCsvReport(selectedInputFile);
-
-                AuditAutomator discoveryAutomator = new AuditAutomator(alias, jiraUrl, traceLogging, true);
-                discoveryAutomator.initHttpClient();
-                // This method will find, sort and print the discovered sub-task keys in the log
-                List<String> discoveredKeys = discoveryAutomator.discoverSubtaskKeys(rowsB);
-                discoveryAutomator.close();
-
-                if (discoveredKeys.isEmpty()) {
-                    AuditLogger.warn("Benchmark: No sub-task keys discovered from the selected CSV file.");
-                    return rowsB;
-                }
-
-                AuditLogger.info("--------------------------------------------------");
-                AuditLogger.info(" JIRA Audit Verification Performance Benchmark ");
-                AuditLogger.info("--------------------------------------------------");
-                AuditLogger.info("Starting head-to-head comparison of full audit runs...");
-
-                // Method A: Full Audit Run (Individual JIRA Query Mode)
-                AuditLogger.info("Running Method A: Full Audit Run (Individual Query Mode)...");
-                AuditAutomator automatorA = new AuditAutomator(alias, jiraUrl, traceLogging, false);
-                long timeA = 0;
-                int networkCallsA = 0;
-                int cacheHitsA = 0;
-                try {
-                    automatorA.initHttpClient();
-                    long startA = System.currentTimeMillis();
-                    automatorA.runAudit(rowsA);
-                    timeA = System.currentTimeMillis() - startA;
-                    networkCallsA = automatorA.getCacheMisses().get();
-                    cacheHitsA = automatorA.getCacheHits().get();
-                    AuditLogger.info("Method A Completed in: " + timeA + " ms");
-                } finally {
-                    automatorA.close();
-                }
-
-                // Method B: Full Audit Run (Bulk JQL Query Mode)
-                AuditLogger.info("Running Method B: Full Audit Run (Bulk JQL Query Mode)...");
-                AuditAutomator automatorB = new AuditAutomator(alias, jiraUrl, traceLogging, true);
-                long timeB = 0;
-                int networkCallsB = 0;
-                int cacheHitsB = 0;
-                try {
-                    automatorB.initHttpClient();
-                    long startB = System.currentTimeMillis();
-                    automatorB.runAudit(rowsB);
-                    timeB = System.currentTimeMillis() - startB;
-                    networkCallsB = automatorB.getCacheMisses().get();
-                    cacheHitsB = automatorB.getCacheHits().get();
-                    AuditLogger.info("Method B Completed in: " + timeB + " ms");
-                } finally {
-                    automatorB.close();
-                }
-
-                AuditLogger.info("==================================================");
-                AuditLogger.info("                 BENCHMARK RESULTS                ");
-                AuditLogger.info("==================================================");
-                AuditLogger.info("Total Keys Queried: " + discoveredKeys.size());
-                AuditLogger.info(String.format("Method A (Individual Mode): %d ms | JIRA HTTP Calls: %d (Cache Hits: %d)", timeA, networkCallsA, cacheHitsA));
-                AuditLogger.info(String.format("Method B (Bulk JQL Mode):   %d ms | JIRA HTTP Calls: %d (Cache Hits: %d)", timeB, networkCallsB, cacheHitsB));
-                AuditLogger.info("--------------------------------------------------");
-                
-                if (timeB < timeA) {
-                    double speedup = (double) timeA / timeB;
-                    double savings = ((double) (timeA - timeB) / timeA) * 100.0;
-                    AuditLogger.info(String.format("Method B is %.2fx FASTER (%.1f%% time saved)!", speedup, savings));
-                } else {
-                    AuditLogger.info("Method A was faster or equal (possibly due to small sample size).");
-                }
-                AuditLogger.info("==================================================");
-
-                return rowsB;
-            }
-        };
-
-        benchmarkTask.setOnSucceeded(e -> {
-            try {
-                List<AuditAutomator.AuditRow> resultRows = benchmarkTask.getValue();
-                List<ObservableAuditRow> temp = new ArrayList<>();
-                for (AuditAutomator.AuditRow r : resultRows) {
-                    temp.add(new ObservableAuditRow(r));
-                }
-                tableItems.setAll(temp);
-
-                runButton.setDisable(false);
-                exportButton.setDisable(false);
-                benchmarkButton.setDisable(false);
-                progressBar.setVisible(false);
-                AuditLogger.info("Benchmark finished. Verified audit results populated in grid.");
-            } catch (Exception ex) {
-                AuditLogger.error("Failed to populate UI table: " + ex.getMessage());
-                ex.printStackTrace();
-            }
-        });
-
-        benchmarkTask.setOnFailed(e -> {
-            runButton.setDisable(false);
-            benchmarkButton.setDisable(false);
-            progressBar.setVisible(false);
-            Throwable err = benchmarkTask.getException();
-            AuditLogger.error("Benchmark failed: " + err.getMessage());
-            err.printStackTrace();
-        });
-
-        Thread thread = new Thread(benchmarkTask);
-        thread.setDaemon(true);
-        thread.start();
-    }
-
-    private void runIndividualQueries(AuditAutomator automator, List<String> keys, int poolSize) throws Exception {
-        ExecutorService executor = Executors.newFixedThreadPool(poolSize);
-        List<Future<?>> futures = new ArrayList<>();
-
-        for (final String key : keys) {
-            futures.add(executor.submit(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        String url = automator.getJiraUrl() + "/rest/api/2/issue/" + key;
-                        String res = executeFreshGet(automator, url);
-                        if (res != null) {
-                            JsonObject payload = JsonParser.parseString(res).getAsJsonObject();
-                            JsonObject fields = payload.getAsJsonObject("fields");
-                            String summary = fields.get("summary") != null ? fields.get("summary").getAsString() : "";
-                        }
-                    } catch (Exception e) {
-                        AuditLogger.error("Failed query for " + key + ": " + e.getMessage());
-                    }
-                }
-            }));
-        }
-
-        for (Future<?> f : futures) {
-            f.get();
-        }
-        executor.shutdown();
-    }
-
-    private void runBulkQuery(AuditAutomator automator, List<String> keys) throws Exception {
-        StringBuilder jql = new StringBuilder("key in (");
-        for (int i = 0; i < keys.size(); i++) {
-            jql.append(keys.get(i));
-            if (i < keys.size() - 1) {
-                jql.append(",");
-            }
-        }
-        jql.append(")");
-
-        String url = automator.getJiraUrl() + "/rest/api/2/search?jql=" + URLEncoder.encode(jql.toString(), "UTF-8") + "&fields=summary,description&maxResults=1000";
-        String res = executeFreshGet(automator, url);
-        if (res != null) {
-            JsonObject response = JsonParser.parseString(res).getAsJsonObject();
-            JsonArray issues = response.getAsJsonArray("issues");
-            if (issues != null) {
-                for (JsonElement el : issues) {
-                    JsonObject issue = el.getAsJsonObject();
-                    JsonObject fields = issue.getAsJsonObject("fields");
-                    String summary = fields.get("summary") != null ? fields.get("summary").getAsString() : "";
-                }
-            }
-        }
-    }
-
-    private String executeFreshGet(AuditAutomator automator, String url) throws Exception {
-        HttpGet request = new HttpGet(url);
-        request.addHeader("Accept", "application/json");
-        try (CloseableHttpResponse response = automator.getHttpClient().execute(request)) {
-            int status = response.getStatusLine().getStatusCode();
-            if (status == 200) {
-                HttpEntity entity = response.getEntity();
-                return entity != null ? EntityUtils.toString(entity) : null;
-            }
-        }
-        return null;
-    }
 }
