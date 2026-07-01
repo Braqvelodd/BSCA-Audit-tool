@@ -859,8 +859,17 @@ public class AuditAutomator {
                     return null;
                 }
             } catch (Exception e) {
-                AuditLogger.error("HTTP request failed: " + e.getMessage());
-                throw e;
+                retries++;
+                AuditLogger.warn("HTTP request failed (attempt " + retries + " of " + maxRetries + "): " + e.getMessage());
+                if (retries >= maxRetries) {
+                    AuditLogger.error("HTTP request failed permanently after " + maxRetries + " attempts: " + e.getMessage());
+                    throw e;
+                }
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+                Thread.sleep(1000L);
             }
         }
         return null;
