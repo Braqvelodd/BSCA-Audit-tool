@@ -96,8 +96,8 @@ public class Benchmark {
             System.out.println("                 BENCHMARK RESULTS                ");
             System.out.println("==================================================");
             System.out.println("Total Keys Queried: " + keys.size());
-            System.out.println(String.format("Method A (Individual HTTP Calls):  %d ms (Avg: %.1f ms/key)", timeA, (double) timeA / keys.size()));
-            System.out.println(String.format("Method B (Single Bulk JQL):        %d ms (Avg: %.1f ms/key)", timeB, (double) timeB / keys.size()));
+            System.out.println(String.format("Method A (Individual HTTP Calls):  %d ms (Avg: %.1f ms/key) | API Requests: %d", timeA, (double) timeA / keys.size(), keys.size()));
+            System.out.println(String.format("Method B (Single Bulk JQL):        %d ms (Avg: %.1f ms/key) | API Requests: 1", timeB, (double) timeB / keys.size()));
             System.out.println("--------------------------------------------------");
             
             if (timeB < timeA) {

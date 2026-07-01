@@ -821,8 +821,8 @@ public class MainApp extends Application {
                     AuditLogger.info("                 BENCHMARK RESULTS                ");
                     AuditLogger.info("==================================================");
                     AuditLogger.info("Total Keys Queried: " + discoveredKeys.size());
-                    AuditLogger.info(String.format("Method A (Individual HTTP Calls):  %d ms (Avg: %.1f ms/key)", timeA, (double) timeA / discoveredKeys.size()));
-                    AuditLogger.info(String.format("Method B (Single Bulk JQL):        %d ms (Avg: %.1f ms/key)", timeB, (double) timeB / discoveredKeys.size()));
+                    AuditLogger.info(String.format("Method A (Individual HTTP Calls):  %d ms (Avg: %.1f ms/key) | API Requests: %d", timeA, (double) timeA / discoveredKeys.size(), discoveredKeys.size()));
+                    AuditLogger.info(String.format("Method B (Single Bulk JQL):        %d ms (Avg: %.1f ms/key) | API Requests: 1", timeB, (double) timeB / discoveredKeys.size()));
                     AuditLogger.info("--------------------------------------------------");
                     
                     if (timeB < timeA) {
