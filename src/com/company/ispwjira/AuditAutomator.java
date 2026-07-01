@@ -767,12 +767,10 @@ public class AuditAutomator {
 
                                 try {
                                     String subtaskUrl = jiraUrl + "/rest/api/2/issue/" + task.subtaskKey;
-                                    String subtaskJson = executeHttpGetWithRetry(task.subtaskKey); // wait, let's make sure it matches url
-                                    String subtaskUrlFull = jiraUrl + "/rest/api/2/issue/" + task.subtaskKey;
-                                    String subtaskJsonFull = executeHttpGetWithRetry(subtaskUrlFull);
-                                    if (subtaskJsonFull == null) return;
+                                    String subtaskJson = executeHttpGetWithRetry(subtaskUrl);
+                                    if (subtaskJson == null) return;
 
-                                    JsonObject subPayload = JsonParser.parseString(subtaskJsonFull).getAsJsonObject();
+                                    JsonObject subPayload = JsonParser.parseString(subtaskJson).getAsJsonObject();
                                     JsonObject subFields = subPayload.getAsJsonObject("fields");
                                     if (subFields == null) return;
 
