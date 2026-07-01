@@ -635,7 +635,8 @@ public class AuditAutomator {
                                 String description = subFields.get("description") != null && !subFields.get("description").isJsonNull()
                                         ? subFields.get("description").getAsString() : "";
 
-                                boolean matchSummary = summary.toLowerCase().trim().startsWith(searchString);
+                                String summaryNorm = summary.toLowerCase().trim().replaceAll("\\s+", " ");
+                                boolean matchSummary = summaryNorm.startsWith(searchString);
                                 boolean matchDesc = isCiInDescription(description, row.type, row.name);
 
                                 SubtaskInspectionTask originalTask = taskMap.get(subtaskKey);
