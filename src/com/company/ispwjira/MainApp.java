@@ -781,73 +781,104 @@ public class MainApp extends Application {
 
         String alias = selectedCert.getAlias();
 
-        Task<Void> benchmarkTask = new Task<Void>() {
+        Task<List<AuditAutomator.AuditRow>> benchmarkTask = new Task<List<AuditAutomator.AuditRow>>() {
             @Override
-            protected Void call() throws Exception {
-                AuditLogger.info("Parsing input CSV for benchmark discovery...");
-                List<AuditAutomator.AuditRow> rows = AuditAutomator.parseCsvReport(selectedInputFile);
+            protected List<AuditAutomator.AuditRow> call() throws Exception {
+                AuditLogger.info("Parsing input CSV for benchmark runs...");
+                List<AuditAutomator.AuditRow> rowsA = AuditAutomator.parseCsvReport(selectedInputFile);
+                List<AuditAutomator.AuditRow> rowsB = AuditAutomator.parseCsvReport(selectedInputFile);
 
-                AuditAutomator automator = new AuditAutomator(alias, jiraUrl, traceLogging);
-                try {
-                    automator.initHttpClient();
-                    List<String> discoveredKeys = automator.discoverSubtaskKeys(rows);
+                AuditAutomator discoveryAutomator = new AuditAutomator(alias, jiraUrl, traceLogging, true);
+                discoveryAutomator.initHttpClient();
+                // This method will find, sort and print the discovered sub-task keys in the log
+                List<String> discoveredKeys = discoveryAutomator.discoverSubtaskKeys(rowsB);
+                discoveryAutomator.close();
 
-                    if (discoveredKeys.isEmpty()) {
-                        AuditLogger.warn("Benchmark: No sub-task keys discovered from the selected CSV file.");
-                        return null;
-                    }
-
-                    AuditLogger.info("--------------------------------------------------");
-                    AuditLogger.info(" JIRA Query Performance Benchmark (Head-to-Head) ");
-                    AuditLogger.info("--------------------------------------------------");
-                    AuditLogger.info("Total Keys to Query: " + discoveredKeys.size());
-                    AuditLogger.info("Starting timing tests...");
-
-                    // Method A: Individual Queries (simulating the previous parallel execution)
-                    AuditLogger.info("Running Method A: Parallel Individual Requests (20 Threads)...");
-                    long startA = System.currentTimeMillis();
-                    runIndividualQueries(automator, discoveredKeys, 20);
-                    long timeA = System.currentTimeMillis() - startA;
-                    AuditLogger.info("Method A Completed in: " + timeA + " ms");
-
-                    // Method B: Bulk JQL Query (current implementation)
-                    AuditLogger.info("Running Method B: Single Bulk JQL Search Request...");
-                    long startB = System.currentTimeMillis();
-                    runBulkQuery(automator, discoveredKeys);
-                    long timeB = System.currentTimeMillis() - startB;
-                    AuditLogger.info("Method B Completed in: " + timeB + " ms");
-
-                    AuditLogger.info("==================================================");
-                    AuditLogger.info("                 BENCHMARK RESULTS                ");
-                    AuditLogger.info("==================================================");
-                    AuditLogger.info("Total Keys Queried: " + discoveredKeys.size());
-                    AuditLogger.info(String.format("Method A (Individual HTTP Calls):  %d ms (Avg: %.1f ms/key) | API Requests: %d", timeA, (double) timeA / discoveredKeys.size(), discoveredKeys.size()));
-                    AuditLogger.info(String.format("Method B (Single Bulk JQL):        %d ms (Avg: %.1f ms/key) | API Requests: 1", timeB, (double) timeB / discoveredKeys.size()));
-                    AuditLogger.info("--------------------------------------------------");
-                    
-                    if (timeB < timeA) {
-                        double speedup = (double) timeA / timeB;
-                        double savings = ((double) (timeA - timeB) / timeA) * 100.0;
-                        AuditLogger.info(String.format("Method B is %.2fx FASTER (%.1f%% time saved)!", speedup, savings));
-                    } else {
-                        AuditLogger.info("Method A was faster or equal (possibly due to small batch size).");
-                    }
-                    AuditLogger.info("==================================================");
-
-                } finally {
-                    automator.close();
+                if (discoveredKeys.isEmpty()) {
+                    AuditLogger.warn("Benchmark: No sub-task keys discovered from the selected CSV file.");
+                    return rowsB;
                 }
-                return null;
+
+                AuditLogger.info("--------------------------------------------------");
+                AuditLogger.info(" JIRA Audit Verification Performance Benchmark ");
+                AuditLogger.info("--------------------------------------------------");
+                AuditLogger.info("Starting head-to-head comparison of full audit runs...");
+
+                // Method A: Full Audit Run (Individual JIRA Query Mode)
+                AuditLogger.info("Running Method A: Full Audit Run (Individual Query Mode)...");
+                AuditAutomator automatorA = new AuditAutomator(alias, jiraUrl, traceLogging, false);
+                long timeA = 0;
+                int networkCallsA = 0;
+                int cacheHitsA = 0;
+                try {
+                    automatorA.initHttpClient();
+                    long startA = System.currentTimeMillis();
+                    automatorA.runAudit(rowsA);
+                    timeA = System.currentTimeMillis() - startA;
+                    networkCallsA = automatorA.getCacheMisses().get();
+                    cacheHitsA = automatorA.getCacheHits().get();
+                    AuditLogger.info("Method A Completed in: " + timeA + " ms");
+                } finally {
+                    automatorA.close();
+                }
+
+                // Method B: Full Audit Run (Bulk JQL Query Mode)
+                AuditLogger.info("Running Method B: Full Audit Run (Bulk JQL Query Mode)...");
+                AuditAutomator automatorB = new AuditAutomator(alias, jiraUrl, traceLogging, true);
+                long timeB = 0;
+                int networkCallsB = 0;
+                int cacheHitsB = 0;
+                try {
+                    automatorB.initHttpClient();
+                    long startB = System.currentTimeMillis();
+                    automatorB.runAudit(rowsB);
+                    timeB = System.currentTimeMillis() - startB;
+                    networkCallsB = automatorB.getCacheMisses().get();
+                    cacheHitsB = automatorB.getCacheHits().get();
+                    AuditLogger.info("Method B Completed in: " + timeB + " ms");
+                } finally {
+                    automatorB.close();
+                }
+
+                AuditLogger.info("==================================================");
+                AuditLogger.info("                 BENCHMARK RESULTS                ");
+                AuditLogger.info("==================================================");
+                AuditLogger.info("Total Keys Queried: " + discoveredKeys.size());
+                AuditLogger.info(String.format("Method A (Individual Mode): %d ms | JIRA HTTP Calls: %d (Cache Hits: %d)", timeA, networkCallsA, cacheHitsA));
+                AuditLogger.info(String.format("Method B (Bulk JQL Mode):   %d ms | JIRA HTTP Calls: %d (Cache Hits: %d)", timeB, networkCallsB, cacheHitsB));
+                AuditLogger.info("--------------------------------------------------");
+                
+                if (timeB < timeA) {
+                    double speedup = (double) timeA / timeB;
+                    double savings = ((double) (timeA - timeB) / timeA) * 100.0;
+                    AuditLogger.info(String.format("Method B is %.2fx FASTER (%.1f%% time saved)!", speedup, savings));
+                } else {
+                    AuditLogger.info("Method A was faster or equal (possibly due to small sample size).");
+                }
+                AuditLogger.info("==================================================");
+
+                return rowsB;
             }
         };
 
         benchmarkTask.setOnSucceeded(e -> {
-            runButton.setDisable(false);
-            if (tableItems.size() > 0) {
+            try {
+                List<AuditAutomator.AuditRow> resultRows = benchmarkTask.getValue();
+                List<ObservableAuditRow> temp = new ArrayList<>();
+                for (AuditAutomator.AuditRow r : resultRows) {
+                    temp.add(new ObservableAuditRow(r));
+                }
+                tableItems.setAll(temp);
+
+                runButton.setDisable(false);
                 exportButton.setDisable(false);
+                benchmarkButton.setDisable(false);
+                progressBar.setVisible(false);
+                AuditLogger.info("Benchmark finished. Verified audit results populated in grid.");
+            } catch (Exception ex) {
+                AuditLogger.error("Failed to populate UI table: " + ex.getMessage());
+                ex.printStackTrace();
             }
-            benchmarkButton.setDisable(false);
-            progressBar.setVisible(false);
         });
 
         benchmarkTask.setOnFailed(e -> {
