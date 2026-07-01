@@ -270,12 +270,19 @@ public class AuditAutomator {
             }
         }
         long endTime = System.currentTimeMillis();
-        double durationSeconds = (endTime - startTime) / 1000.0;
-        AuditLogger.info(String.format("Audit run completed in %.2f seconds.", durationSeconds));
+        long durationMillis = endTime - startTime;
+        long minutes = (durationMillis / 1000) / 60;
+        double seconds = ((durationMillis / 1000) % 60) + ((durationMillis % 1000) / 1000.0);
+        String durationStr = minutes > 0 
+                ? String.format("%d min %.2f sec", minutes, seconds)
+                : String.format("%.2f seconds", seconds);
+
         int hits = cacheHits.get();
         int misses = cacheMisses.get();
         double ratio = (hits + misses) > 0 ? ((double) hits / (hits + misses)) * 100.0 : 0.0;
-        AuditLogger.info(String.format("JIRA HTTP Cache Stats - Hits: %d, Misses: %d, Hit Ratio: %.1f%%", hits, misses, ratio));
+
+        AuditLogger.info(String.format("Audit run completed in %s. Total JIRA API calls: %d", durationStr, misses));
+        AuditLogger.info(String.format("JIRA HTTP Cache Stats - Hits: %d, Misses (API Calls): %d, Hit Ratio: %.1f%%", hits, misses, ratio));
     }
 
     private void auditSingleRow(final AuditRow row) throws Exception {
