@@ -25,6 +25,20 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import org.apache.http.HttpEntity;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.util.EntityUtils;
+
+import java.net.URLEncoder;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
 public class MainApp extends Application {
 
     public static class ObservableAuditRow {
@@ -194,6 +208,7 @@ public class MainApp extends Application {
     private TextArea logArea;
     private Button runButton;
     private Button exportButton;
+    private Button benchmarkButton;
     private ProgressBar progressBar;
 
     private File selectedInputFile;
@@ -480,6 +495,7 @@ public class MainApp extends Application {
         runButton.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
         runButton.setStyle("-fx-background-color: #2563eb; -fx-text-fill: white; -fx-padding: 8px 16px; -fx-background-radius: 4px;");
         runButton.setOnAction(e -> handleRunAudit());
+        runButton.setDisable(true);
 
         exportButton = new Button("Export Reports (CSV)");
         exportButton.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
@@ -487,7 +503,13 @@ public class MainApp extends Application {
         exportButton.setOnAction(e -> handleExportCsv());
         exportButton.setDisable(true);
 
-        HBox btnHBox = new HBox(12, runButton, exportButton);
+        benchmarkButton = new Button("Run Query Benchmark");
+        benchmarkButton.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
+        benchmarkButton.setStyle("-fx-background-color: #7c3aed; -fx-text-fill: white; -fx-padding: 8px 16px; -fx-background-radius: 4px;");
+        benchmarkButton.setOnAction(e -> handleRunBenchmark());
+        benchmarkButton.setDisable(true);
+
+        HBox btnHBox = new HBox(12, runButton, exportButton, benchmarkButton);
         btnHBox.setAlignment(Pos.CENTER_RIGHT);
 
         card.getChildren().addAll(tableTitle, tableView, btnHBox);
@@ -587,6 +609,8 @@ public class MainApp extends Application {
             }
             selectedOutputFile = new File(parent, base + "_filled" + ext);
             AuditLogger.info("Auto-assigned output file: " + selectedOutputFile.getName());
+            runButton.setDisable(false);
+            benchmarkButton.setDisable(false);
         }
     }
 
@@ -632,6 +656,7 @@ public class MainApp extends Application {
 
         runButton.setDisable(true);
         exportButton.setDisable(true);
+        benchmarkButton.setDisable(true);
         progressBar.setVisible(true);
         progressBar.setProgress(-1);
 
@@ -666,6 +691,7 @@ public class MainApp extends Application {
                 
                 runButton.setDisable(false);
                 exportButton.setDisable(false);
+                benchmarkButton.setDisable(false);
                 progressBar.setVisible(false);
                 AuditLogger.info("Audit verification process finished. Results populated in grid.");
             } catch (Exception ex) {
@@ -676,6 +702,7 @@ public class MainApp extends Application {
 
         auditTask.setOnFailed(e -> {
             runButton.setDisable(false);
+            benchmarkButton.setDisable(false);
             progressBar.setVisible(false);
             Throwable err = auditTask.getException();
             AuditLogger.error("Audit run failed: " + err.getMessage());
@@ -721,5 +748,186 @@ public class MainApp extends Application {
         alert.setHeaderText(null);
         alert.setContentText(content);
         alert.showAndWait();
+    }
+
+    private void handleRunBenchmark() {
+        String jiraUrl = jiraUrlField.getText().trim();
+        CertificateManager.CertInfo selectedCert = certComboBox.getValue();
+        boolean traceLogging = traceLoggingCheckbox.isSelected();
+
+        if (jiraUrl.isEmpty()) {
+            showAlert("Configuration Error", "Please provide a valid Jira Server URL.");
+            return;
+        }
+        if (selectedInputFile == null || !selectedInputFile.exists()) {
+            showAlert("Input Error", "Please select a valid input ISPW CSV file.");
+            return;
+        }
+        if (selectedCert == null) {
+            showAlert("CAC Error", "A valid DoD CAC client certificate must be selected.");
+            return;
+        }
+
+        ConfigManager.setJiraUrl(jiraUrl);
+        ConfigManager.setTraceLoggingEnabled(traceLogging);
+        ConfigManager.setLastSelectedCert(selectedCert.getAlias());
+        ConfigManager.save();
+
+        runButton.setDisable(true);
+        exportButton.setDisable(true);
+        benchmarkButton.setDisable(true);
+        progressBar.setVisible(true);
+        progressBar.setProgress(-1);
+
+        String alias = selectedCert.getAlias();
+
+        Task<Void> benchmarkTask = new Task<Void>() {
+            @Override
+            protected Void call() throws Exception {
+                AuditLogger.info("Parsing input CSV for benchmark discovery...");
+                List<AuditAutomator.AuditRow> rows = AuditAutomator.parseCsvReport(selectedInputFile);
+
+                AuditAutomator automator = new AuditAutomator(alias, jiraUrl, traceLogging);
+                try {
+                    automator.initHttpClient();
+                    List<String> discoveredKeys = automator.discoverSubtaskKeys(rows);
+
+                    if (discoveredKeys.isEmpty()) {
+                        AuditLogger.warn("Benchmark: No sub-task keys discovered from the selected CSV file.");
+                        return null;
+                    }
+
+                    AuditLogger.info("--------------------------------------------------");
+                    AuditLogger.info(" JIRA Query Performance Benchmark (Head-to-Head) ");
+                    AuditLogger.info("--------------------------------------------------");
+                    AuditLogger.info("Total Keys to Query: " + discoveredKeys.size());
+                    AuditLogger.info("Starting timing tests...");
+
+                    // Method A: Individual Queries (simulating the previous parallel execution)
+                    AuditLogger.info("Running Method A: Parallel Individual Requests (20 Threads)...");
+                    long startA = System.currentTimeMillis();
+                    runIndividualQueries(automator, discoveredKeys, 20);
+                    long timeA = System.currentTimeMillis() - startA;
+                    AuditLogger.info("Method A Completed in: " + timeA + " ms");
+
+                    // Method B: Bulk JQL Query (current implementation)
+                    AuditLogger.info("Running Method B: Single Bulk JQL Search Request...");
+                    long startB = System.currentTimeMillis();
+                    runBulkQuery(automator, discoveredKeys);
+                    long timeB = System.currentTimeMillis() - startB;
+                    AuditLogger.info("Method B Completed in: " + timeB + " ms");
+
+                    AuditLogger.info("==================================================");
+                    AuditLogger.info("                 BENCHMARK RESULTS                ");
+                    AuditLogger.info("==================================================");
+                    AuditLogger.info("Total Keys Queried: " + discoveredKeys.size());
+                    AuditLogger.info(String.format("Method A (Individual HTTP Calls):  %d ms (Avg: %.1f ms/key)", timeA, (double) timeA / discoveredKeys.size()));
+                    AuditLogger.info(String.format("Method B (Single Bulk JQL):        %d ms (Avg: %.1f ms/key)", timeB, (double) timeB / discoveredKeys.size()));
+                    AuditLogger.info("--------------------------------------------------");
+                    
+                    if (timeB < timeA) {
+                        double speedup = (double) timeA / timeB;
+                        double savings = ((double) (timeA - timeB) / timeA) * 100.0;
+                        AuditLogger.info(String.format("Method B is %.2fx FASTER (%.1f%% time saved)!", speedup, savings));
+                    } else {
+                        AuditLogger.info("Method A was faster or equal (possibly due to small batch size).");
+                    }
+                    AuditLogger.info("==================================================");
+
+                } finally {
+                    automator.close();
+                }
+                return null;
+            }
+        };
+
+        benchmarkTask.setOnSucceeded(e -> {
+            runButton.setDisable(false);
+            if (tableItems.size() > 0) {
+                exportButton.setDisable(false);
+            }
+            benchmarkButton.setDisable(false);
+            progressBar.setVisible(false);
+        });
+
+        benchmarkTask.setOnFailed(e -> {
+            runButton.setDisable(false);
+            benchmarkButton.setDisable(false);
+            progressBar.setVisible(false);
+            Throwable err = benchmarkTask.getException();
+            AuditLogger.error("Benchmark failed: " + err.getMessage());
+            err.printStackTrace();
+        });
+
+        Thread thread = new Thread(benchmarkTask);
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private void runIndividualQueries(AuditAutomator automator, List<String> keys, int poolSize) throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(poolSize);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (final String key : keys) {
+            futures.add(executor.submit(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        String url = automator.getJiraUrl() + "/rest/api/2/issue/" + key;
+                        String res = executeFreshGet(automator, url);
+                        if (res != null) {
+                            JsonObject payload = JsonParser.parseString(res).getAsJsonObject();
+                            JsonObject fields = payload.getAsJsonObject("fields");
+                            String summary = fields.get("summary") != null ? fields.get("summary").getAsString() : "";
+                        }
+                    } catch (Exception e) {
+                        AuditLogger.error("Failed query for " + key + ": " + e.getMessage());
+                    }
+                }
+            }));
+        }
+
+        for (Future<?> f : futures) {
+            f.get();
+        }
+        executor.shutdown();
+    }
+
+    private void runBulkQuery(AuditAutomator automator, List<String> keys) throws Exception {
+        StringBuilder jql = new StringBuilder("key in (");
+        for (int i = 0; i < keys.size(); i++) {
+            jql.append(keys.get(i));
+            if (i < keys.size() - 1) {
+                jql.append(",");
+            }
+        }
+        jql.append(")");
+
+        String url = automator.getJiraUrl() + "/rest/api/2/search?jql=" + URLEncoder.encode(jql.toString(), "UTF-8") + "&fields=summary,description&maxResults=1000";
+        String res = executeFreshGet(automator, url);
+        if (res != null) {
+            JsonObject response = JsonParser.parseString(res).getAsJsonObject();
+            JsonArray issues = response.getAsJsonArray("issues");
+            if (issues != null) {
+                for (JsonElement el : issues) {
+                    JsonObject issue = el.getAsJsonObject();
+                    JsonObject fields = issue.getAsJsonObject("fields");
+                    String summary = fields.get("summary") != null ? fields.get("summary").getAsString() : "";
+                }
+            }
+        }
+    }
+
+    private String executeFreshGet(AuditAutomator automator, String url) throws Exception {
+        HttpGet request = new HttpGet(url);
+        request.addHeader("Accept", "application/json");
+        try (CloseableHttpResponse response = automator.getHttpClient().execute(request)) {
+            int status = response.getStatusLine().getStatusCode();
+            if (status == 200) {
+                HttpEntity entity = response.getEntity();
+                return entity != null ? EntityUtils.toString(entity) : null;
+            }
+        }
+        return null;
     }
 }

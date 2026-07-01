@@ -965,6 +965,99 @@ public class AuditAutomator {
         return ""; // default to empty
     }
 
+    public List<String> discoverSubtaskKeys(List<AuditRow> rows) throws Exception {
+        java.util.Set<String> subtaskKeys = new java.util.HashSet<>();
+        AuditLogger.info("Starting sub-task discovery on " + rows.size() + " rows...");
+
+        for (AuditRow row : rows) {
+            if (!"Y".equalsIgnoreCase(row.selected)) continue;
+
+            // Query Path 1 sub-tasks
+            String path1Jql = "project = TFS AND issuetype = Sub-task AND summary ~ \"" + row.releaseId + "\"";
+            String path1Url = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(path1Jql, "UTF-8") + "&maxResults=1000&fields=parent,summary";
+            String path1Json = executeHttpGetWithRetry(path1Url);
+            if (path1Json != null) {
+                JsonObject response = JsonParser.parseString(path1Json).getAsJsonObject();
+                JsonArray issues = response.getAsJsonArray("issues");
+                if (issues != null) {
+                    java.util.Set<String> parentKeys = new java.util.HashSet<>();
+                    for (JsonElement issueEl : issues) {
+                        JsonObject issue = issueEl.getAsJsonObject();
+                        subtaskKeys.add(issue.get("key").getAsString());
+
+                        JsonObject fields = issue.getAsJsonObject("fields");
+                        if (fields != null && fields.has("parent") && !fields.get("parent").isJsonNull()) {
+                            JsonObject parent = fields.getAsJsonObject("parent");
+                            parentKeys.add(parent.get("key").getAsString());
+                        }
+                    }
+
+                    // Sibling sub-tasks for parent keys
+                    if (!parentKeys.isEmpty()) {
+                        StringBuilder siblingJql = new StringBuilder("parent in (");
+                        int idx = 0;
+                        for (String pk : parentKeys) {
+                            siblingJql.append(pk);
+                            if (idx < parentKeys.size() - 1) siblingJql.append(",");
+                            idx++;
+                        }
+                        siblingJql.append(") AND issuetype = Sub-task");
+                        String siblingUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(siblingJql.toString(), "UTF-8") + "&maxResults=1000&fields=summary";
+                        String siblingJson = executeHttpGetWithRetry(siblingUrl);
+                        if (siblingJson != null) {
+                            JsonObject siblingResponse = JsonParser.parseString(siblingJson).getAsJsonObject();
+                            JsonArray siblings = siblingResponse.getAsJsonArray("issues");
+                            if (siblings != null) {
+                                for (JsonElement sibEl : siblings) {
+                                    subtaskKeys.add(sibEl.getAsJsonObject().get("key").getAsString());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Query Path 2 Epics/Stories
+            String path2Jql = "project = TFS AND issuetype = Epic AND (summary ~ \"" + row.releaseId + "\" OR description ~ \"" + row.releaseId + "\")";
+            String path2Url = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(path2Jql, "UTF-8") + "&maxResults=1000&fields=summary";
+            String path2Json = executeHttpGetWithRetry(path2Url);
+            if (path2Json != null) {
+                JsonObject response = JsonParser.parseString(path2Json).getAsJsonObject();
+                JsonArray epics = response.getAsJsonArray("issues");
+                if (epics != null) {
+                    for (JsonElement epicEl : epics) {
+                        String epicKey = epicEl.getAsJsonObject().get("key").getAsString();
+
+                        // Child stories
+                        String storyJql = "\"epic link\" = " + epicKey + " OR parent = " + epicKey;
+                        String storyUrl = jiraUrl + "/rest/api/2/search?jql=" + URLEncoder.encode(storyJql, "UTF-8") + "&maxResults=1000&fields=subtasks";
+                        String storyJson = executeHttpGetWithRetry(storyUrl);
+                        if (storyJson != null) {
+                            JsonObject storyResponse = JsonParser.parseString(storyJson).getAsJsonObject();
+                            JsonArray stories = storyResponse.getAsJsonArray("issues");
+                            if (stories != null) {
+                                for (JsonElement storyEl : stories) {
+                                    JsonObject storyFields = storyEl.getAsJsonObject().getAsJsonObject("fields");
+                                    if (storyFields != null && storyFields.has("subtasks")) {
+                                        JsonArray subtasks = storyFields.getAsJsonArray("subtasks");
+                                        if (subtasks != null) {
+                                            for (JsonElement subEl : subtasks) {
+                                                subtaskKeys.add(subEl.getAsJsonObject().get("key").getAsString());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        AuditLogger.info("Discovered " + subtaskKeys.size() + " unique sub-task keys from the CSV content.");
+        return new java.util.ArrayList<>(subtaskKeys);
+    }
+
     public static void writeCsvReport(File file, List<AuditRow> rows) throws IOException {
         try (BufferedWriter bw = new BufferedWriter(new FileWriter(file))) {
             // 1. Write the original metadata lines
