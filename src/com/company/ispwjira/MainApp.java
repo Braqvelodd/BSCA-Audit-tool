@@ -457,7 +457,55 @@ public class MainApp extends Application {
         // Jira columns
         TableColumn<ObservableAuditRow, String> colEpic = new TableColumn<>("Jira Epic Key");
         colEpic.setCellValueFactory(d -> d.getValue().jiraNumProperty());
-        colEpic.setCellFactory(TextFieldTableCell.forTableColumn());
+        colEpic.setCellFactory(col -> new TextFieldTableCell<ObservableAuditRow, String>(new javafx.util.converter.DefaultStringConverter()) {
+            {
+                setOnMouseClicked(event -> {
+                    if (event.isControlDown() && !isEditing()) {
+                        String jiraKey = getItem();
+                        if (jiraKey != null && !jiraKey.trim().isEmpty()) {
+                            String baseUrl = jiraUrlField.getText().trim();
+                            if (!baseUrl.isEmpty()) {
+                                String url = baseUrl;
+                                if (!url.endsWith("/")) {
+                                    url += "/";
+                                }
+                                url += "browse/" + jiraKey.trim();
+                                getHostServices().showDocument(url);
+                            }
+                        }
+                    }
+                });
+
+                setOnMouseMoved(event -> {
+                    if (event.isControlDown() && !isEditing()) {
+                        String jiraKey = getItem();
+                        if (jiraKey != null && !jiraKey.trim().isEmpty()) {
+                            setCursor(javafx.scene.Cursor.HAND);
+                            setStyle("-fx-text-fill: #2563eb; -fx-underline: true;");
+                            return;
+                        }
+                    }
+                    setCursor(javafx.scene.Cursor.DEFAULT);
+                    setStyle("");
+                });
+
+                setOnMouseExited(event -> {
+                    setCursor(javafx.scene.Cursor.DEFAULT);
+                    setStyle("");
+                });
+            }
+
+            @Override
+            public void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setStyle("");
+                } else {
+                    setText(item);
+                }
+            }
+        });
         colEpic.setOnEditCommit(e -> e.getRowValue().setJiraNum(e.getNewValue()));
         colEpic.setPrefWidth(90);
 
