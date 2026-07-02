@@ -4,6 +4,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import org.apache.http.Header;
 import org.apache.http.HttpEntity;
 import org.apache.http.client.config.RequestConfig;
@@ -286,6 +288,25 @@ public class AuditAutomator {
 
         AuditLogger.info(String.format("Audit run completed in %s. Total JIRA API calls: %d", durationStr, misses));
         AuditLogger.info(String.format("JIRA HTTP Cache Stats - Hits: %d, Misses (API Calls): %d, Hit Ratio: %.1f%%", hits, misses, ratio));
+
+        // Export JIRA Cache to JSON file for AI review
+        File cacheFile = new File("jira_cache.json");
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter(cacheFile))) {
+            JsonObject root = new JsonObject();
+            for (Map.Entry<String, String> entry : getCache.entrySet()) {
+                try {
+                    JsonElement parsed = JsonParser.parseString(entry.getValue());
+                    root.add(entry.getKey(), parsed);
+                } catch (Exception parseEx) {
+                    root.addProperty(entry.getKey(), entry.getValue());
+                }
+            }
+            Gson gson = new GsonBuilder().setPrettyPrinting().create();
+            gson.toJson(root, bw);
+            AuditLogger.info("JIRA search cache exported to: " + cacheFile.getAbsolutePath());
+        } catch (IOException e) {
+            AuditLogger.error("Failed to export JIRA search cache: " + e.getMessage());
+        }
     }
 
     private void auditSingleRow(final AuditRow row) throws Exception {
