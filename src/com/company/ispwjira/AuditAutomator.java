@@ -297,6 +297,7 @@ public class AuditAutomator {
 
         row.addTrace("[TRACE] Auditing Release ID '" + row.releaseId + "', CI Type: '" + row.type + "', CI Name: '" + row.name + "'");
         final List<String> descMatchedKeys = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final List<String> nameOnlyMatchedKeys = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         boolean isSrRelease = row.releaseId.trim().toUpperCase().startsWith("SR");
         boolean taskLinkSuccess = false;
@@ -445,7 +446,7 @@ public class AuditAutomator {
                                                         JsonArray epicsList = epicsResponse.getAsJsonArray("issues");
                                                         if (epicsList != null && epicsList.size() > 0) {
                                                             row.addTrace("[TRACE] Path 1: Inspecting sub-tasks under linked candidate Epics...");
-                                                            taskLinkSuccess = performCandidateInspection(row, epicsList, descMatchedKeys);
+                                                            taskLinkSuccess = performCandidateInspection(row, epicsList, descMatchedKeys, nameOnlyMatchedKeys);
                                                             if (taskLinkSuccess) {
                                                                 return; // Finished auditing row!
                                                             }
@@ -457,6 +458,12 @@ public class AuditAutomator {
                                             } else {
                                                 row.addTrace("[TRACE] Path 1: Parent Task " + parentTaskKey + " has 0 sub-tasks.");
                                             }
+                                        }
+                                    }
+                                } else {
+                                    if (!nameNorm.isEmpty() && descLower.contains(nameNorm)) {
+                                        if (!nameOnlyMatchedKeys.contains(subtaskKey)) {
+                                            nameOnlyMatchedKeys.add(subtaskKey);
                                         }
                                     }
                                 }
@@ -495,7 +502,7 @@ public class AuditAutomator {
         
         if (fbCandidates != null && fbCandidates.size() > 0) {
             row.addTrace("[TRACE] Path 2: Inspecting sub-tasks under comment-linked candidate issues...");
-            boolean fallbackSuccess = performCandidateInspection(row, fbCandidates, descMatchedKeys);
+            boolean fallbackSuccess = performCandidateInspection(row, fbCandidates, descMatchedKeys, nameOnlyMatchedKeys);
             if (fallbackSuccess) {
                 return; // Finished auditing row!
             }
@@ -503,11 +510,15 @@ public class AuditAutomator {
 
         // If we reach here, neither path found a match!
         row.test1 = row.test2 = row.test3 = row.test4 = row.test5 = "N";
-        row.notes = "No matching sub-task found for type/name under candidates on both paths.";
+        if (!nameOnlyMatchedKeys.isEmpty()) {
+            row.notes = "Name found without type in description of " + String.join(", ", nameOnlyMatchedKeys);
+        } else {
+            row.notes = "No matching sub-task found for type/name under candidates on both paths.";
+        }
         row.addTrace("[TRACE] FAILED: Release ID '" + row.releaseId + "' audit complete. No matching sub-task found on either path.");
     }
 
-    private boolean performCandidateInspection(final AuditRow row, JsonArray candidates, List<String> descMatchedKeys) throws Exception {
+    private boolean performCandidateInspection(final AuditRow row, JsonArray candidates, List<String> descMatchedKeys, List<String> nameOnlyMatchedKeys) throws Exception {
         List<String> matchedEpicSummaries = new ArrayList<>();
         boolean overallMatched = false;
         boolean overallMatchedViaSummary = false;
@@ -665,6 +676,17 @@ public class AuditAutomator {
                                 SubtaskInspectionTask originalTask = taskMap.get(subtaskKey);
                                 row.addTrace("[TRACE] Comparing sub-task " + subtaskKey + " (parent: " + originalTask.parentKey + "): Summary='" + summary + "' StartsWith='" + searchString + "'? " + matchSummary + "; Description Contains='" + searchString + "'? " + matchDesc);
 
+                                String descLower = description.toLowerCase();
+                                String nameNorm = row.name.trim().toLowerCase();
+                                if (!nameNorm.isEmpty() && descLower.contains(nameNorm)) {
+                                    boolean fullMatch = isCiInDescription(description, row.type, row.name);
+                                    if (!fullMatch) {
+                                        if (!nameOnlyMatchedKeys.contains(subtaskKey)) {
+                                            nameOnlyMatchedKeys.add(subtaskKey);
+                                        }
+                                    }
+                                }
+
                                 if (matchSummary || matchDesc) {
                                     test3Passed.set(true);
                                     if (matchSummary) {
@@ -752,7 +774,11 @@ public class AuditAutomator {
                             firstMatchedTest2 = "N";
                         }
 
-                        firstMatchedTest3 = "Y";
+                        if (matchedViaDesc.get() && !matchedViaSummary.get()) {
+                            firstMatchedTest3 = "REVIEW";
+                        } else {
+                            firstMatchedTest3 = "Y";
+                        }
 
                         firstMatchedTest4 = "N";
                         try {
