@@ -204,6 +204,7 @@ public class MainApp extends Application {
     private TextField jiraUrlField;
     private ComboBox<CertificateManager.CertInfo> certComboBox;
     private CheckBox traceLoggingCheckbox;
+    private CheckBox exportCacheCheckbox;
     private TextField inputPathField;
     private TextArea logArea;
     private Button runButton;
@@ -362,13 +363,23 @@ public class MainApp extends Application {
         grid.add(jiraUrlLabel, 0, 0);
         grid.add(jiraUrlField, 1, 0);
 
-        traceLoggingCheckbox = new CheckBox("Enable Detailed JIRA Trace Logging");
-        traceLoggingCheckbox.setFont(Font.font("Segoe UI", 12));
-        grid.add(traceLoggingCheckbox, 2, 0);
+        traceLoggingCheckbox = new CheckBox("Enable JIRA Trace Logs");
+        traceLoggingCheckbox.setFont(Font.font("Segoe UI", 11));
         traceLoggingCheckbox.selectedProperty().addListener((obs, oldVal, newVal) -> {
             ConfigManager.setTraceLoggingEnabled(newVal);
             ConfigManager.save();
         });
+
+        exportCacheCheckbox = new CheckBox("Export Cache to JSON");
+        exportCacheCheckbox.setFont(Font.font("Segoe UI", 11));
+        exportCacheCheckbox.selectedProperty().addListener((obs, oldVal, newVal) -> {
+            ConfigManager.setExportCacheEnabled(newVal);
+            ConfigManager.save();
+        });
+
+        HBox optionsHBox = new HBox(12, traceLoggingCheckbox, exportCacheCheckbox);
+        optionsHBox.setAlignment(Pos.CENTER_LEFT);
+        grid.add(optionsHBox, 2, 0);
 
         // Row 1: CAC Certificate
         Label certLabel = new Label("CAC Cert Select:");
@@ -610,6 +621,7 @@ public class MainApp extends Application {
     private void loadConfigValues() {
         jiraUrlField.setText(ConfigManager.getJiraUrl());
         traceLoggingCheckbox.setSelected(ConfigManager.isTraceLoggingEnabled());
+        exportCacheCheckbox.setSelected(ConfigManager.isExportCacheEnabled());
         refreshCertificateList();
 
         String lastCert = ConfigManager.getLastSelectedCert();
@@ -669,6 +681,7 @@ public class MainApp extends Application {
         String jiraUrl = jiraUrlField.getText().trim();
         CertificateManager.CertInfo selectedCert = certComboBox.getValue();
         boolean traceLogging = traceLoggingCheckbox.isSelected();
+        boolean exportCache = exportCacheCheckbox.isSelected();
 
         if (jiraUrl.isEmpty()) {
             showAlert("Configuration Error", "Please provide a valid Jira Server URL.");
@@ -689,6 +702,7 @@ public class MainApp extends Application {
 
         ConfigManager.setJiraUrl(jiraUrl);
         ConfigManager.setTraceLoggingEnabled(traceLogging);
+        ConfigManager.setExportCacheEnabled(exportCache);
         if (selectedCert != null) {
             ConfigManager.setLastSelectedCert(selectedCert.getAlias());
         }
@@ -708,7 +722,7 @@ public class MainApp extends Application {
                 AuditLogger.info("Parsing 19-column input ISPW CSV...");
                 List<AuditAutomator.AuditRow> rows = AuditAutomator.parseCsvReport(selectedInputFile);
                 
-                AuditAutomator automator = new AuditAutomator(alias, jiraUrl, traceLogging);
+                AuditAutomator automator = new AuditAutomator(alias, jiraUrl, traceLogging, exportCache);
                 try {
                     automator.initHttpClient();
                     automator.runAudit(rows);

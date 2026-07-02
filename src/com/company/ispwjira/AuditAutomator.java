@@ -123,6 +123,7 @@ public class AuditAutomator {
     private final String certAlias;
     private final String jiraUrl;
     private final boolean traceLoggingEnabled;
+    private final boolean exportCacheEnabled;
     private CloseableHttpClient httpClient;
     private final ExecutorService rowExecutorService = Executors.newFixedThreadPool(5);
 
@@ -135,9 +136,14 @@ public class AuditAutomator {
     public static final List<String> metadataHeaderLines = new ArrayList<>();
 
     public AuditAutomator(String certAlias, String jiraUrl, boolean traceLoggingEnabled) {
+        this(certAlias, jiraUrl, traceLoggingEnabled, false);
+    }
+
+    public AuditAutomator(String certAlias, String jiraUrl, boolean traceLoggingEnabled, boolean exportCacheEnabled) {
         this.certAlias = certAlias;
         this.jiraUrl = jiraUrl;
         this.traceLoggingEnabled = traceLoggingEnabled;
+        this.exportCacheEnabled = exportCacheEnabled;
     }
 
     public void initHttpClient() throws Exception {
@@ -289,23 +295,25 @@ public class AuditAutomator {
         AuditLogger.info(String.format("Audit run completed in %s. Total JIRA API calls: %d", durationStr, misses));
         AuditLogger.info(String.format("JIRA HTTP Cache Stats - Hits: %d, Misses (API Calls): %d, Hit Ratio: %.1f%%", hits, misses, ratio));
 
-        // Export JIRA Cache to JSON file for AI review
-        File cacheFile = new File("jira_cache.json");
-        try (BufferedWriter bw = new BufferedWriter(new FileWriter(cacheFile))) {
-            JsonObject root = new JsonObject();
-            for (Map.Entry<String, String> entry : getCache.entrySet()) {
-                try {
-                    JsonElement parsed = JsonParser.parseString(entry.getValue());
-                    root.add(entry.getKey(), parsed);
-                } catch (Exception parseEx) {
-                    root.addProperty(entry.getKey(), entry.getValue());
+        // Export JIRA Cache to JSON file for AI review if enabled
+        if (exportCacheEnabled) {
+            File cacheFile = new File("jira_cache.json");
+            try (BufferedWriter bw = new BufferedWriter(new FileWriter(cacheFile))) {
+                JsonObject root = new JsonObject();
+                for (Map.Entry<String, String> entry : getCache.entrySet()) {
+                    try {
+                        JsonElement parsed = JsonParser.parseString(entry.getValue());
+                        root.add(entry.getKey(), parsed);
+                    } catch (Exception parseEx) {
+                        root.addProperty(entry.getKey(), entry.getValue());
+                    }
                 }
+                Gson gson = new GsonBuilder().setPrettyPrinting().create();
+                gson.toJson(root, bw);
+                AuditLogger.info("JIRA search cache exported to: " + cacheFile.getAbsolutePath());
+            } catch (IOException e) {
+                AuditLogger.error("Failed to export JIRA search cache: " + e.getMessage());
             }
-            Gson gson = new GsonBuilder().setPrettyPrinting().create();
-            gson.toJson(root, bw);
-            AuditLogger.info("JIRA search cache exported to: " + cacheFile.getAbsolutePath());
-        } catch (IOException e) {
-            AuditLogger.error("Failed to export JIRA search cache: " + e.getMessage());
         }
     }
 

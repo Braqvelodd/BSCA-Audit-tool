@@ -14,6 +14,7 @@ public class ConfigManager {
     static {
         properties.setProperty("jira.url", "https://jira.example.com");
         properties.setProperty("jira.trace_logging", "false");
+        properties.setProperty("jira.export_cache", "false");
         properties.setProperty("user.last_selected_cert", "");
         load();
     }
@@ -72,5 +73,13 @@ public class ConfigManager {
 
     public static void setLastSelectedCert(String alias) {
         properties.setProperty("user.last_selected_cert", alias);
+    }
+
+    public static boolean isExportCacheEnabled() {
+        return Boolean.parseBoolean(properties.getProperty("jira.export_cache", "false"));
+    }
+
+    public static void setExportCacheEnabled(boolean enabled) {
+        properties.setProperty("jira.export_cache", String.valueOf(enabled));
     }
 }
